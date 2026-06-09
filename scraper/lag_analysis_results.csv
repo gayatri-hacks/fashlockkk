@@ -1,0 +1,551 @@
+keyword,category,market,lag_months,correlation,confidence
+tailored,silhouette,IT,0,0.89,high
+tailored,silhouette,FR,0,0.897,high
+tailored,silhouette,US,2,0.861,high
+tailored,silhouette,KR,0,0.47,medium
+tailored,silhouette,JP,1,0.826,high
+tailored,silhouette,GB,0,0.832,high
+tailored,silhouette,DE,0,0.741,high
+tailored,silhouette,AU,3,0.849,high
+tailored,silhouette,BR,0,0.825,high
+tailored,silhouette,SG,0,0.798,high
+tailored,silhouette,AE,0,0.879,high
+utility,style,IT,0,0.98,high
+utility,style,FR,18,0.779,high
+utility,style,US,36,0.945,high
+utility,style,KR,5,0.103,low
+utility,style,JP,5,0.819,high
+utility,style,GB,0,-0.147,low
+utility,style,DE,6,0.817,high
+utility,style,AU,1,0.909,high
+utility,style,BR,5,0.788,high
+utility,style,SG,5,0.716,high
+utility,style,AE,4,0.198,low
+quiet luxury,aesthetic,IT,26,0.612,high
+quiet luxury,aesthetic,FR,0,0.678,high
+quiet luxury,aesthetic,US,0,0.695,high
+quiet luxury,aesthetic,KR,0,0.683,high
+quiet luxury,aesthetic,JP,0,0.52,medium
+quiet luxury,aesthetic,GB,32,0.808,high
+quiet luxury,aesthetic,DE,31,0.743,high
+quiet luxury,aesthetic,AU,31,0.695,high
+quiet luxury,aesthetic,BR,30,0.492,medium
+quiet luxury,aesthetic,SG,32,0.625,high
+quiet luxury,aesthetic,AE,25,0.623,high
+streetwear,aesthetic,IT,0,0.529,medium
+streetwear,aesthetic,FR,0,0.431,medium
+streetwear,aesthetic,US,5,0.716,high
+streetwear,aesthetic,KR,0,0.856,high
+streetwear,aesthetic,JP,3,0.733,high
+streetwear,aesthetic,GB,0,0.729,high
+streetwear,aesthetic,DE,0,0.601,high
+streetwear,aesthetic,AU,0,0.712,high
+streetwear,aesthetic,BR,29,0.713,high
+streetwear,aesthetic,SG,0,0.594,medium
+streetwear,aesthetic,AE,0,0.783,high
+cottagecore,aesthetic,IT,0,0.77,high
+cottagecore,aesthetic,FR,0,0.856,high
+cottagecore,aesthetic,US,9,0.732,high
+cottagecore,aesthetic,KR,0,0.635,high
+cottagecore,aesthetic,JP,0,0.427,medium
+cottagecore,aesthetic,GB,9,0.693,high
+cottagecore,aesthetic,DE,0,0.764,high
+cottagecore,aesthetic,AU,10,0.732,high
+cottagecore,aesthetic,BR,0,0.669,high
+cottagecore,aesthetic,SG,11,0.574,medium
+cottagecore,aesthetic,AE,22,0.564,medium
+gorpcore,aesthetic,IT,16,0.44,medium
+gorpcore,aesthetic,FR,3,-0.005,low
+gorpcore,aesthetic,US,36,0.299,low
+gorpcore,aesthetic,KR,35,0.524,medium
+gorpcore,aesthetic,JP,1,0.895,high
+gorpcore,aesthetic,GB,35,0.348,low
+gorpcore,aesthetic,DE,28,0.793,high
+gorpcore,aesthetic,AU,36,0.373,low
+gorpcore,aesthetic,BR,3,0.135,low
+gorpcore,aesthetic,SG,36,0.233,low
+gorpcore,aesthetic,AE,0,-1.0,low
+tenniscore,aesthetic,IT,0,-0.004,low
+tenniscore,aesthetic,FR,0,-1.0,low
+tenniscore,aesthetic,US,0,-1.0,low
+tenniscore,aesthetic,KR,0,-1.0,low
+tenniscore,aesthetic,JP,0,-0.004,low
+tenniscore,aesthetic,GB,0,-1.0,low
+tenniscore,aesthetic,DE,0,-1.0,low
+tenniscore,aesthetic,AU,29,1.0,high
+tenniscore,aesthetic,BR,0,-1.0,low
+tenniscore,aesthetic,SG,0,-0.004,low
+tenniscore,aesthetic,AE,16,0.818,high
+preppy,aesthetic,IT,0,0.193,low
+preppy,aesthetic,FR,0,0.104,low
+preppy,aesthetic,US,15,0.175,low
+preppy,aesthetic,KR,33,0.363,low
+preppy,aesthetic,JP,26,0.197,low
+preppy,aesthetic,GB,19,0.191,low
+preppy,aesthetic,DE,0,0.275,low
+preppy,aesthetic,AU,21,0.189,low
+preppy,aesthetic,BR,1,0.25,low
+preppy,aesthetic,SG,13,0.173,low
+preppy,aesthetic,AE,6,0.184,low
+Y2K,aesthetic,IT,9,0.139,low
+Y2K,aesthetic,FR,34,0.165,low
+Y2K,aesthetic,US,35,0.238,low
+Y2K,aesthetic,KR,0,0.1,low
+Y2K,aesthetic,JP,31,0.386,low
+Y2K,aesthetic,GB,29,0.253,low
+Y2K,aesthetic,DE,32,0.202,low
+Y2K,aesthetic,AU,21,0.21,low
+Y2K,aesthetic,BR,18,0.5,medium
+Y2K,aesthetic,SG,19,0.039,low
+Y2K,aesthetic,AE,22,0.19,low
+maxi,garment,IT,5,0.722,high
+maxi,garment,FR,7,0.617,high
+maxi,garment,US,25,0.775,high
+maxi,garment,KR,0,0.339,low
+maxi,garment,JP,0,-0.36,low
+maxi,garment,GB,36,0.739,high
+maxi,garment,DE,15,0.783,high
+maxi,garment,AU,31,0.781,high
+maxi,garment,BR,36,0.47,medium
+maxi,garment,SG,36,0.69,high
+maxi,garment,AE,0,0.739,high
+mini,garment,IT,0,0.543,medium
+mini,garment,FR,0,0.053,low
+mini,garment,US,0,-0.059,low
+mini,garment,KR,36,0.399,low
+mini,garment,JP,22,0.466,medium
+mini,garment,GB,0,-0.101,low
+mini,garment,DE,0,0.573,medium
+mini,garment,AU,0,-0.258,low
+mini,garment,BR,0,0.557,medium
+mini,garment,SG,0,0.321,low
+mini,garment,AE,0,0.354,low
+bodycon,garment,IT,0,0.242,low
+bodycon,garment,FR,0,0.242,low
+bodycon,garment,US,35,0.514,medium
+bodycon,garment,KR,0,0.135,low
+bodycon,garment,JP,16,0.118,low
+bodycon,garment,GB,34,0.388,low
+bodycon,garment,DE,10,0.24,low
+bodycon,garment,AU,34,0.515,medium
+bodycon,garment,BR,0,-1.0,low
+bodycon,garment,SG,25,-0.021,low
+bodycon,garment,AE,0,0.587,medium
+coord,garment,IT,11,0.29,low
+coord,garment,FR,0,-1.0,low
+coord,garment,US,0,-1.0,low
+coord,garment,KR,11,0.274,low
+coord,garment,JP,0,-1.0,low
+coord,garment,GB,9,0.834,high
+coord,garment,DE,9,0.541,medium
+coord,garment,AU,15,0.258,low
+coord,garment,BR,0,-1.0,low
+coord,garment,SG,0,0.056,low
+coord,garment,AE,0,0.314,low
+jumpsuit,garment,IT,0,0.48,medium
+jumpsuit,garment,FR,0,0.131,low
+jumpsuit,garment,US,0,0.79,high
+jumpsuit,garment,KR,11,0.242,low
+jumpsuit,garment,JP,0,0.104,low
+jumpsuit,garment,GB,0,0.81,high
+jumpsuit,garment,DE,36,0.786,high
+jumpsuit,garment,AU,0,0.716,high
+jumpsuit,garment,BR,27,0.121,low
+jumpsuit,garment,SG,31,0.018,low
+jumpsuit,garment,AE,0,0.833,high
+trench,garment,IT,9,0.616,high
+trench,garment,FR,21,0.603,high
+trench,garment,US,21,0.613,high
+trench,garment,KR,13,0.093,low
+trench,garment,JP,9,0.431,medium
+trench,garment,GB,14,0.664,high
+trench,garment,DE,1,0.55,medium
+trench,garment,AU,7,0.55,medium
+trench,garment,BR,29,0.126,low
+trench,garment,SG,36,0.478,medium
+trench,garment,AE,36,0.681,high
+blazer,garment,IT,1,0.636,high
+blazer,garment,FR,23,0.704,high
+blazer,garment,US,1,0.769,high
+blazer,garment,KR,0,0.201,low
+blazer,garment,JP,0,0.407,medium
+blazer,garment,GB,26,0.728,high
+blazer,garment,DE,9,0.841,high
+blazer,garment,AU,6,0.825,high
+blazer,garment,BR,18,0.824,high
+blazer,garment,SG,36,0.629,high
+blazer,garment,AE,0,0.865,high
+denim,garment,IT,7,0.763,high
+denim,garment,FR,7,0.692,high
+denim,garment,US,31,0.848,high
+denim,garment,KR,0,0.529,medium
+denim,garment,JP,0,0.522,medium
+denim,garment,GB,18,0.805,high
+denim,garment,DE,32,0.554,medium
+denim,garment,AU,29,0.84,high
+denim,garment,BR,0,0.693,high
+denim,garment,SG,36,0.543,medium
+denim,garment,AE,3,0.651,high
+leather,material,IT,13,0.53,medium
+leather,material,FR,0,0.502,medium
+leather,material,US,36,0.676,high
+leather,material,KR,0,0.202,low
+leather,material,JP,0,0.332,low
+leather,material,GB,0,0.195,low
+leather,material,DE,25,0.438,medium
+leather,material,AU,31,0.436,medium
+leather,material,BR,36,-0.07,low
+leather,material,SG,36,0.278,low
+leather,material,AE,36,0.372,low
+sheer,material,IT,16,0.671,high
+sheer,material,FR,14,0.613,high
+sheer,material,US,0,0.265,low
+sheer,material,KR,10,0.472,medium
+sheer,material,JP,11,0.436,medium
+sheer,material,GB,0,0.334,low
+sheer,material,DE,27,0.394,low
+sheer,material,AU,13,0.708,high
+sheer,material,BR,17,0.486,medium
+sheer,material,SG,3,0.737,high
+sheer,material,AE,0,0.728,high
+sequin,garment,IT,0,0.504,medium
+sequin,garment,FR,36,0.739,high
+sequin,garment,US,36,0.725,high
+sequin,garment,KR,36,0.526,medium
+sequin,garment,JP,25,0.628,high
+sequin,garment,GB,26,0.571,medium
+sequin,garment,DE,0,0.651,high
+sequin,garment,AU,0,0.791,high
+sequin,garment,BR,0,0.174,low
+sequin,garment,SG,24,0.688,high
+sequin,garment,AE,36,0.801,high
+color blocking,style,IT,6,0.083,low
+color blocking,style,FR,0,0.174,low
+color blocking,style,US,12,0.328,low
+color blocking,style,KR,9,0.366,low
+color blocking,style,JP,20,0.404,medium
+color blocking,style,GB,18,0.14,low
+color blocking,style,DE,12,0.376,low
+color blocking,style,AU,11,0.246,low
+color blocking,style,BR,17,0.328,low
+color blocking,style,SG,3,0.25,low
+color blocking,style,AE,29,0.139,low
+layering,style,IT,10,0.738,high
+layering,style,FR,0,0.591,medium
+layering,style,US,12,0.796,high
+layering,style,KR,0,0.449,medium
+layering,style,JP,0,0.443,medium
+layering,style,GB,0,0.819,high
+layering,style,DE,0,0.602,high
+layering,style,AU,0,0.818,high
+layering,style,BR,1,0.465,medium
+layering,style,SG,0,0.629,high
+layering,style,AE,0,0.582,medium
+monochrome,style,IT,11,0.26,low
+monochrome,style,FR,10,0.673,high
+monochrome,style,US,3,0.738,high
+monochrome,style,KR,0,0.546,medium
+monochrome,style,JP,3,0.329,low
+monochrome,style,GB,0,0.743,high
+monochrome,style,DE,0,0.461,medium
+monochrome,style,AU,12,0.717,high
+monochrome,style,BR,0,0.772,high
+monochrome,style,SG,6,0.642,high
+monochrome,style,AE,0,0.622,high
+oversized blazer,silhouette,IT,33,0.48,medium
+oversized blazer,silhouette,FR,34,0.453,medium
+oversized blazer,silhouette,US,14,0.548,medium
+oversized blazer,silhouette,KR,32,0.402,medium
+oversized blazer,silhouette,JP,26,0.226,low
+oversized blazer,silhouette,GB,10,0.526,medium
+oversized blazer,silhouette,DE,21,0.658,high
+oversized blazer,silhouette,AU,7,0.557,medium
+oversized blazer,silhouette,BR,19,0.57,medium
+oversized blazer,silhouette,SG,3,0.024,low
+oversized blazer,silhouette,AE,26,0.537,medium
+wide leg trousers,silhouette,IT,0,0.518,medium
+wide leg trousers,silhouette,FR,0,0.615,high
+wide leg trousers,silhouette,US,1,0.761,high
+wide leg trousers,silhouette,KR,0,0.57,medium
+wide leg trousers,silhouette,JP,0,0.497,medium
+wide leg trousers,silhouette,GB,34,0.831,high
+wide leg trousers,silhouette,DE,0,0.656,high
+wide leg trousers,silhouette,AU,0,0.851,high
+wide leg trousers,silhouette,BR,3,0.145,low
+wide leg trousers,silhouette,SG,26,0.001,low
+wide leg trousers,silhouette,AE,34,0.472,medium
+kurta,ethnic,IT,5,0.225,low
+kurta,ethnic,FR,7,0.489,medium
+kurta,ethnic,US,12,0.823,high
+kurta,ethnic,KR,0,0.13,low
+kurta,ethnic,JP,0,0.188,low
+kurta,ethnic,GB,18,0.814,high
+kurta,ethnic,DE,5,0.706,high
+kurta,ethnic,AU,0,0.909,high
+kurta,ethnic,BR,17,0.694,high
+kurta,ethnic,SG,0,0.887,high
+kurta,ethnic,AE,0,0.854,high
+co-ord set,garment,IT,34,0.0,low
+co-ord set,garment,FR,35,1.0,high
+co-ord set,garment,US,27,0.693,high
+co-ord set,garment,KR,4,0.447,medium
+co-ord set,garment,JP,4,0.419,medium
+co-ord set,garment,GB,36,-0.036,low
+co-ord set,garment,DE,25,0.8,high
+co-ord set,garment,AU,16,0.787,high
+co-ord set,garment,BR,5,0.664,high
+co-ord set,garment,SG,0,-1.0,low
+co-ord set,garment,AE,22,0.797,high
+ethnic fusion,ethnic,IT,14,0.944,high
+ethnic fusion,ethnic,FR,36,1.0,high
+ethnic fusion,ethnic,US,7,1.0,high
+ethnic fusion,ethnic,KR,20,1.0,high
+ethnic fusion,ethnic,JP,16,0.684,high
+ethnic fusion,ethnic,GB,0,-1.0,low
+ethnic fusion,ethnic,DE,13,0.884,high
+ethnic fusion,ethnic,AU,0,-1.0,low
+ethnic fusion,ethnic,BR,0,-1.0,low
+ethnic fusion,ethnic,SG,11,0.865,high
+ethnic fusion,ethnic,AE,19,0.0,low
+printed,style,IT,0,0.104,low
+printed,style,FR,0,0.176,low
+printed,style,US,36,0.141,low
+printed,style,KR,0,0.223,low
+printed,style,JP,0,0.102,low
+printed,style,GB,35,0.021,low
+printed,style,DE,0,0.043,low
+printed,style,AU,0,-0.144,low
+printed,style,BR,35,-0.079,low
+printed,style,SG,36,-0.165,low
+printed,style,AE,36,-0.012,low
+mirror work,ethnic,IT,11,0.009,low
+mirror work,ethnic,FR,18,-0.031,low
+mirror work,ethnic,US,11,0.643,high
+mirror work,ethnic,KR,0,0.108,low
+mirror work,ethnic,JP,0,-0.066,low
+mirror work,ethnic,GB,12,0.583,medium
+mirror work,ethnic,DE,1,0.026,low
+mirror work,ethnic,AU,6,0.682,high
+mirror work,ethnic,BR,19,0.216,low
+mirror work,ethnic,SG,7,0.116,low
+mirror work,ethnic,AE,6,0.341,low
+vintage,style,IT,0,0.746,high
+vintage,style,FR,0,0.809,high
+vintage,style,US,0,0.583,medium
+vintage,style,KR,0,0.75,high
+vintage,style,JP,0,0.495,medium
+vintage,style,GB,0,0.916,high
+vintage,style,DE,0,0.81,high
+vintage,style,AU,0,0.892,high
+vintage,style,BR,0,0.744,high
+vintage,style,SG,0,0.871,high
+vintage,style,AE,0,0.907,high
+graphic,style,IT,20,0.861,high
+graphic,style,FR,4,0.83,high
+graphic,style,US,17,0.891,high
+graphic,style,KR,3,0.42,medium
+graphic,style,JP,3,0.93,high
+graphic,style,GB,5,0.845,high
+graphic,style,DE,7,0.74,high
+graphic,style,AU,0,0.933,high
+graphic,style,BR,35,0.79,high
+graphic,style,SG,0,0.815,high
+graphic,style,AE,8,0.205,low
+minimal,style,IT,0,0.34,low
+minimal,style,FR,0,0.571,medium
+minimal,style,US,0,0.358,low
+minimal,style,KR,0,-0.176,low
+minimal,style,JP,0,0.384,low
+minimal,style,GB,0,0.38,low
+minimal,style,DE,0,0.244,low
+minimal,style,AU,0,0.154,low
+minimal,style,BR,0,0.403,medium
+minimal,style,SG,0,0.149,low
+minimal,style,AE,0,0.167,low
+relaxed fit,style,IT,0,0.018,low
+relaxed fit,style,FR,0,0.06,low
+relaxed fit,style,US,36,0.491,medium
+relaxed fit,style,KR,0,0.05,low
+relaxed fit,style,JP,0,0.333,low
+relaxed fit,style,GB,0,0.715,high
+relaxed fit,style,DE,1,0.723,high
+relaxed fit,style,AU,0,0.767,high
+relaxed fit,style,BR,0,0.212,low
+relaxed fit,style,SG,0,0.704,high
+relaxed fit,style,AE,0,0.676,high
+checks,style,IT,2,0.268,low
+checks,style,FR,4,0.246,low
+checks,style,US,23,0.225,low
+checks,style,KR,18,0.282,low
+checks,style,JP,1,0.402,medium
+checks,style,GB,17,0.479,medium
+checks,style,DE,0,0.451,medium
+checks,style,AU,1,0.604,high
+checks,style,BR,13,0.248,low
+checks,style,SG,0,0.234,low
+checks,style,AE,0,0.315,low
+embroidered,style,IT,33,0.482,medium
+embroidered,style,FR,27,0.518,medium
+embroidered,style,US,31,0.417,medium
+embroidered,style,KR,12,0.765,high
+embroidered,style,JP,15,0.848,high
+embroidered,style,GB,32,0.47,medium
+embroidered,style,DE,33,0.519,medium
+embroidered,style,AU,35,0.441,medium
+embroidered,style,BR,0,0.303,low
+embroidered,style,SG,34,0.42,medium
+embroidered,style,AE,18,0.571,medium
+loose,style,IT,0,0.309,low
+loose,style,FR,0,0.505,medium
+loose,style,US,0,0.658,high
+loose,style,KR,35,0.242,low
+loose,style,JP,0,0.463,medium
+loose,style,GB,0,0.588,medium
+loose,style,DE,0,0.25,low
+loose,style,AU,33,0.531,medium
+loose,style,BR,0,0.409,medium
+loose,style,SG,0,0.478,medium
+loose,style,AE,0,0.414,medium
+pleated,style,IT,0,0.836,high
+pleated,style,FR,0,0.775,high
+pleated,style,US,6,0.819,high
+pleated,style,KR,0,0.604,high
+pleated,style,JP,0,0.72,high
+pleated,style,GB,0,0.846,high
+pleated,style,DE,0,0.885,high
+pleated,style,AU,29,0.81,high
+pleated,style,BR,0,0.217,low
+pleated,style,SG,0,0.848,high
+pleated,style,AE,0,0.884,high
+linen,material,IT,0,0.315,low
+linen,material,FR,0,0.797,high
+linen,material,US,0,0.629,high
+linen,material,KR,22,0.777,high
+linen,material,JP,0,0.683,high
+linen,material,GB,33,0.778,high
+linen,material,DE,0,0.891,high
+linen,material,AU,29,0.871,high
+linen,material,BR,0,0.807,high
+linen,material,SG,0,0.854,high
+linen,material,AE,36,0.921,high
+washed,material,IT,15,0.698,high
+washed,material,FR,0,0.717,high
+washed,material,US,21,0.796,high
+washed,material,KR,3,0.587,medium
+washed,material,JP,0,0.717,high
+washed,material,GB,0,0.811,high
+washed,material,DE,0,0.823,high
+washed,material,AU,31,0.76,high
+washed,material,BR,14,0.681,high
+washed,material,SG,0,0.784,high
+washed,material,AE,10,0.711,high
+floral,material,IT,0,0.677,high
+floral,material,FR,0,0.545,medium
+floral,material,US,7,0.62,high
+floral,material,KR,0,0.71,high
+floral,material,JP,0,0.668,high
+floral,material,GB,0,0.73,high
+floral,material,DE,0,0.848,high
+floral,material,AU,29,0.687,high
+floral,material,BR,35,0.591,medium
+floral,material,SG,0,0.583,medium
+floral,material,AE,0,0.79,high
+oversized,silhouette,IT,3,0.761,high
+oversized,silhouette,FR,6,0.855,high
+oversized,silhouette,US,31,0.879,high
+oversized,silhouette,KR,0,0.453,medium
+oversized,silhouette,JP,6,0.891,high
+oversized,silhouette,GB,30,0.92,high
+oversized,silhouette,DE,17,0.951,high
+oversized,silhouette,AU,13,0.917,high
+oversized,silhouette,BR,0,0.898,high
+oversized,silhouette,SG,32,0.849,high
+oversized,silhouette,AE,22,0.928,high
+baggy,silhouette,IT,1,0.955,high
+baggy,silhouette,FR,0,0.9,high
+baggy,silhouette,US,3,0.957,high
+baggy,silhouette,KR,0,0.869,high
+baggy,silhouette,JP,0,0.129,low
+baggy,silhouette,GB,4,0.946,high
+baggy,silhouette,DE,12,0.954,high
+baggy,silhouette,AU,0,-0.012,low
+baggy,silhouette,BR,3,0.94,high
+baggy,silhouette,SG,0,0.897,high
+baggy,silhouette,AE,0,0.879,high
+cropped,silhouette,IT,34,0.828,high
+cropped,silhouette,FR,13,0.847,high
+cropped,silhouette,US,27,0.856,high
+cropped,silhouette,KR,29,0.818,high
+cropped,silhouette,JP,36,-0.091,low
+cropped,silhouette,GB,21,0.654,high
+cropped,silhouette,DE,33,0.815,high
+cropped,silhouette,AU,33,0.839,high
+cropped,silhouette,BR,36,0.714,high
+cropped,silhouette,SG,14,0.748,high
+cropped,silhouette,AE,28,0.778,high
+wide leg,silhouette,IT,0,0.928,high
+wide leg,silhouette,FR,0,0.839,high
+wide leg,silhouette,US,3,0.928,high
+wide leg,silhouette,KR,26,0.811,high
+wide leg,silhouette,JP,3,0.677,high
+wide leg,silhouette,GB,0,0.913,high
+wide leg,silhouette,DE,16,0.9,high
+wide leg,silhouette,AU,9,0.911,high
+wide leg,silhouette,BR,8,0.805,high
+wide leg,silhouette,SG,0,0.902,high
+wide leg,silhouette,AE,0,0.605,high
+flared,silhouette,IT,0,0.635,high
+flared,silhouette,FR,0,0.394,low
+flared,silhouette,US,1,0.888,high
+flared,silhouette,KR,0,0.061,low
+flared,silhouette,JP,0,0.019,low
+flared,silhouette,GB,0,0.868,high
+flared,silhouette,DE,0,0.775,high
+flared,silhouette,AU,0,0.927,high
+flared,silhouette,BR,0,0.259,low
+flared,silhouette,SG,0,0.35,low
+flared,silhouette,AE,0,0.744,high
+cargo,garment,IT,36,0.462,medium
+cargo,garment,FR,36,0.01,low
+cargo,garment,US,36,-0.053,low
+cargo,garment,KR,3,0.157,low
+cargo,garment,JP,0,0.44,medium
+cargo,garment,GB,36,0.255,low
+cargo,garment,DE,36,0.247,low
+cargo,garment,AU,34,-0.165,low
+cargo,garment,BR,25,-0.294,low
+cargo,garment,SG,0,-0.274,low
+cargo,garment,AE,35,-0.401,low
+knit,garment,IT,0,0.655,high
+knit,garment,FR,0,0.649,high
+knit,garment,US,0,0.209,low
+knit,garment,KR,0,0.664,high
+knit,garment,JP,1,0.209,low
+knit,garment,GB,0,0.302,low
+knit,garment,DE,0,0.563,medium
+knit,garment,AU,7,0.301,low
+knit,garment,BR,36,0.114,low
+knit,garment,SG,0,0.466,medium
+knit,garment,AE,0,0.496,medium
+chinos,garment,IT,15,0.848,high
+chinos,garment,FR,0,0.694,high
+chinos,garment,US,36,0.775,high
+chinos,garment,KR,0,0.395,low
+chinos,garment,JP,36,0.065,low
+chinos,garment,GB,28,0.514,medium
+chinos,garment,DE,36,0.436,medium
+chinos,garment,AU,12,0.894,high
+chinos,garment,BR,0,0.366,low
+chinos,garment,SG,16,0.791,high
+chinos,garment,AE,0,0.712,high
+seersucker,garment,IT,0,-1.0,low
+seersucker,garment,FR,0,-1.0,low
+seersucker,garment,US,0,-1.0,low
+seersucker,garment,KR,0,-1.0,low
+seersucker,garment,JP,0,-1.0,low
+seersucker,garment,GB,0,-1.0,low
+seersucker,garment,DE,0,-1.0,low
+seersucker,garment,AU,0,-1.0,low
+seersucker,garment,BR,0,-1.0,low
+seersucker,garment,SG,0,-1.0,low
+seersucker,garment,AE,0,-1.0,low

@@ -1,0 +1,17 @@
+.next
+node_modules
+.env
+.env.local
+.DS_Store
+dev.log
+*.tsbuildinfo
+__pycache__
+*.pyc
+.pytest_cache
+dist
+coverage
+*.sqlite
+scraper/.venv
+scraper/*debug*.html
+scraper/logs/
+scraper/*log*.txt

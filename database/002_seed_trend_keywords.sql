@@ -1,0 +1,40 @@
+insert into trend_keywords (keyword, category) values
+  ('oversized', 'silhouette'),
+  ('baggy', 'silhouette'),
+  ('cargo', 'utility'),
+  ('denim', 'fabric'),
+  ('linen', 'fabric'),
+  ('washed', 'finish'),
+  ('vintage', 'style'),
+  ('graphic', 'style'),
+  ('cropped', 'silhouette'),
+  ('varsity', 'style'),
+  ('utility', 'style'),
+  ('minimal', 'style'),
+  ('co-ord', 'set'),
+  ('streetwear', 'style'),
+  ('relaxed fit', 'silhouette'),
+  ('wide leg', 'silhouette'),
+  ('slim fit', 'silhouette'),
+  ('satin', 'fabric'),
+  ('suede', 'fabric'),
+  ('leather', 'fabric'),
+  ('knit', 'fabric'),
+  ('mesh', 'fabric'),
+  ('floral', 'print'),
+  ('monochrome', 'color'),
+  ('earth tones', 'color'),
+  ('brown', 'color'),
+  ('beige', 'color'),
+  ('grey', 'color'),
+  ('black', 'color'),
+  ('white', 'color')
+on conflict (keyword) do nothing;
+
+insert into sources (name, base_url) values
+  ('Myntra', 'https://www.myntra.com'),
+  ('Ajio', 'https://www.ajio.com'),
+  ('Zara India', 'https://www.zara.com/in'),
+  ('H&M India', 'https://www2.hm.com/en_in/index.html'),
+  ('Nykaa Fashion', 'https://www.nykaafashion.com')
+on conflict (name) do nothing;

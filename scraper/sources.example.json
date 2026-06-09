@@ -1,0 +1,27 @@
+[
+  {
+    "name": "Myntra",
+    "category": "Women Tops",
+    "listing_url": "https://www.myntra.com/women-tops"
+  },
+  {
+    "name": "Ajio",
+    "category": "Men Shirts",
+    "listing_url": "https://www.ajio.com/men-shirts"
+  },
+  {
+    "name": "Zara India",
+    "category": "Women Dresses",
+    "listing_url": "https://www.zara.com/in/en/woman-dresses-l1066.html"
+  },
+  {
+    "name": "H&M India",
+    "category": "Outerwear",
+    "listing_url": "https://www2.hm.com/en_in/men/shop-by-product/jackets-and-coats.html"
+  },
+  {
+    "name": "Nykaa Fashion",
+    "category": "Accessories",
+    "listing_url": "https://www.nykaafashion.com/accessories"
+  }
+]
