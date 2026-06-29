@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { getSupabaseClient, logSupabaseFallback, supabaseCache, supabaseCacheTtl } from "@/lib/supabase";
 
 export const revalidate = 86400;
-export const dynamic = "force-dynamic";
 const GEMINI_MODEL = "gemini-2.5-flash";
 
 const marketCities: Record<string, string> = {

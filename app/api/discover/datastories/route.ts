@@ -33,6 +33,15 @@ function fallbackHeadline(keyword: string) {
   return clean;
 }
 
+function cleanHeadline(value: string) {
+  return value
+    .replace(/^["']|["']$/g, "")
+    .replace(/^([*_]{1,2})(.+)\1\.?$/g, "$2")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/_([^_]+)_/g, "$1")
+    .trim();
+}
+
 function buildFallbackPoints(seed: number) {
   return Array.from({ length: 24 }, (_, index) => ({
     date: `${2024 + Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, "0")}-01`,
@@ -120,7 +129,7 @@ async function geminiInsight(keyword: string, india: Point[], france: Point[]) {
   const peak = peakYear(india);
   const [headline, insight, meaning] = await Promise.all([
     callGeminiText(
-      `Write a punchy editorial headline for a fashion trend story about ${keyword}. Max 6 words. Cormorant Garamond italic energy. Examples: 'The Mini Never Really Left', 'Cargo Found Its Elegance', 'Utility Becomes the New Luxury'. Return only the headline, nothing else.`,
+      `Write a punchy editorial headline for a fashion trend story about ${keyword}. Max 6 words. Cormorant Garamond italic energy. Examples: 'The Mini Never Really Left', 'Cargo Found Its Elegance', 'Utility Becomes the New Luxury'. Return only the headline, nothing else. No markdown, no asterisks.`,
       "data story headline",
     ),
     callGeminiText(
@@ -134,7 +143,7 @@ async function geminiInsight(keyword: string, india: Point[], france: Point[]) {
   ]);
 
   return {
-    headline: headline || fallbackHeadline(keyword),
+    headline: cleanHeadline(headline || fallbackHeadline(keyword)),
     insight:
       insight ||
       `In India, ${keyword} peaked in ${peak}, marking the moment this style moved from search curiosity into wardrobe language. France reads more restrained by comparison, suggesting the trend carries stronger everyday momentum in India right now.`,

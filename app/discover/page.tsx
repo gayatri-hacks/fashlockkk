@@ -1,5 +1,5 @@
 import { Cormorant_Garamond, DM_Sans } from "next/font/google";
-import { FashlockDiscover, type FashlockArticle, type FashlockMoment } from "@/components/discover/fashlock-discover";
+import { FashlockDiscover, type FashlockArticle } from "@/components/discover/fashlock-discover";
 import { seedArticles } from "@/lib/discover-seeds";
 
 const cormorant = Cormorant_Garamond({
@@ -15,61 +15,12 @@ const dmSans = DM_Sans({
   weight: ["200", "300", "400", "500", "600", "700"],
 });
 
-export const dynamic = "force-dynamic";
+export const revalidate = 21600;
+
+const DISCOVER_REVALIDATE_SECONDS = 21600;
 const GEMINI_MODEL = "gemini-2.5-flash";
 
-const historyMoments: Array<Omit<FashlockMoment, "imageUrl"> & { imageQuery: string; topic: string }> = [
-  {
-    year: "1920",
-    fact: "Coco Chanel frees women from the corset",
-    imageQuery: "1920s fashion editorial couture women",
-    topic: "Coco Chanel frees women from the corset 1920 fashion history",
-  },
-  {
-    year: "1947",
-    fact: "Dior's New Look redefines the female silhouette",
-    imageQuery: "dior new look runway fashion editorial",
-    topic: "History of Dior New Look 1947 female silhouette fashion",
-  },
-  {
-    year: "1966",
-    fact: "YSL gives women the tuxedo suit",
-    imageQuery: "women tuxedo suit fashion editorial",
-    topic: "Yves Saint Laurent Le Smoking tuxedo suit women 1966 fashion history",
-  },
-  {
-    year: "1975",
-    fact: "Halston defines American minimalism",
-    imageQuery: "1970s minimalist fashion editorial",
-    topic: "Halston 1970s American minimalism fashion history",
-  },
-  {
-    year: "1994",
-    fact: "Kate Moss and the era of the waif",
-    imageQuery: "90s fashion editorial minimalist runway",
-    topic: "Kate Moss 1994 waif era 90s fashion history",
-  },
-  {
-    year: "2001",
-    fact: "Alexander McQueen turns fashion into theatre",
-    imageQuery: "theatrical runway fashion editorial",
-    topic: "Alexander McQueen fashion as theatre 2001 runway history",
-  },
-  {
-    year: "2014",
-    fact: "Normcore - fashion rejects itself",
-    imageQuery: "normcore street style minimal fashion",
-    topic: "Normcore 2014 fashion rejects itself trend history",
-  },
-  {
-    year: "2020",
-    fact: "Gender-fluid dressing goes mainstream",
-    imageQuery: "gender fluid fashion editorial",
-    topic: "Gender fluid dressing goes mainstream 2020 fashion history",
-  },
-];
-
-async function fetchPexelsImage(query: string, page = 1) {
+async function fetchPexelsImage(query: string, page = 1, revalidateSeconds = DISCOVER_REVALIDATE_SECONDS) {
   const key = process.env.PEXELS_API_KEY;
   if (!key) return null;
 
@@ -82,7 +33,7 @@ async function fetchPexelsImage(query: string, page = 1) {
     });
     const response = await fetch(`https://api.pexels.com/v1/search?${params.toString()}`, {
       headers: { Authorization: key },
-      next: { revalidate: 60 * 60 * 6 },
+      next: { revalidate: revalidateSeconds },
     });
     if (!response.ok) return null;
     const data = (await response.json()) as {
@@ -271,20 +222,17 @@ async function fallbackCuratedArticles(): Promise<FashlockArticle[]> {
     .filter((article) => article.is_featured)
     .slice(0, 6);
 
-  return Promise.all(
-    fallbackStories.map(async (article, index) => {
-      const imageUrl = await fetchPexelsImage(article.visual_prompt || "fashion editorial magazine", index + 1);
-      const content = article.content ?? article.content_excerpt ?? articleBody(article.title, "CURATED SIGNAL");
-      return {
-        title: article.title,
-        url: discoverArticleUrl({ title: article.title, imageUrl, source: "CURATED SIGNAL", tags: [article.category ?? "fashion"] }),
-        imageUrl,
-        sourceName: "CURATED SIGNAL",
-        excerpt: article.content_excerpt ?? previewText(content),
-        content,
-      };
-    }),
-  );
+  return fallbackStories.map((article) => {
+    const content = article.content ?? article.content_excerpt ?? articleBody(article.title, "CURATED SIGNAL");
+    return {
+      title: article.title,
+      url: `/discover/article/${article.slug}`,
+      imageUrl: null,
+      sourceName: "FASHLOCK ARCHIVE",
+      excerpt: article.content_excerpt ?? previewText(content),
+      content,
+    };
+  });
 }
 
 async function fetchSerperCuratedArticles(): Promise<FashlockArticle[]> {
@@ -302,7 +250,7 @@ async function fetchSerperCuratedArticles(): Promise<FashlockArticle[]> {
         q: "latest fashion news runway street style designer trends 2026",
         num: 12,
       }),
-        next: { revalidate: 60 * 60 },
+        next: { revalidate: DISCOVER_REVALIDATE_SECONDS },
       });
     if (!response.ok) {
       console.error("Serper failed:", response.status, await response.text());
@@ -335,15 +283,14 @@ async function fetchSerperCuratedArticles(): Promise<FashlockArticle[]> {
     }
 
     return Promise.all(
-      filtered.map(async (result, index) => {
+      filtered.map(async (result) => {
         const title = result.title ?? "Untitled fashion story";
-        const imageUrl = result.imageUrl ?? (await fetchPexelsImage(`${title} fashion editorial`, index + 1));
         return {
           title,
           url: result.url ?? "#",
           description: result.description,
           source: result.source,
-          imageUrl,
+          imageUrl: null,
           sourceName: result.source,
           excerpt: result.description,
           content: result.description,
@@ -440,7 +387,7 @@ async function fetchFashionSignals() {
         q: `${season} fashion culture style conversation 2026`,
         num: 10,
       }),
-      next: { revalidate: 60 * 60 },
+      next: { revalidate: DISCOVER_REVALIDATE_SECONDS },
     });
     if (!response.ok) return [];
     const data = (await response.json()) as {
@@ -489,7 +436,7 @@ Example format: ["The Return of the City Sari", "Why Utility Dressing Feels Roma
               temperature: 0.85,
             },
           }),
-          next: { revalidate: 60 * 60 },
+          next: { revalidate: DISCOVER_REVALIDATE_SECONDS },
         },
       );
       if (!response.ok) {
@@ -550,145 +497,20 @@ async function generateFashlockOriginals(): Promise<FashlockArticle[]> {
 }
 
 async function fetchFashionNews(): Promise<FashlockArticle[]> {
-  const newsApiKey = process.env.NEWS_API_KEY;
-  const newsDataKey = process.env.NEWSDATA_API_KEY;
-
-  if (newsApiKey) {
-    try {
-      const params = new URLSearchParams({
-        q: 'fashion OR style OR runway OR couture OR "fashion week"',
-        language: "en",
-        sortBy: "publishedAt",
-        pageSize: "24",
-        apiKey: newsApiKey,
-      });
-      const response = await fetch(`https://newsapi.org/v2/everything?${params.toString()}`, {
-        next: { revalidate: 60 * 30 },
-      });
-      if (response.ok) {
-        const data = (await response.json()) as {
-          articles?: Array<{
-            title?: string;
-            description?: string | null;
-            url?: string;
-            urlToImage?: string | null;
-            source?: { name?: string };
-          }>;
-        };
-        const filtered = dedupeArticles(
-          (data.articles ?? []).filter(isFashionArticle),
-          (article) => article.title,
-          (article) => article.urlToImage,
-        ).slice(0, 6);
-
-        if (filtered.length >= 3) {
-          return Promise.all(
-            filtered.map(async (article, index) => {
-              const title = article.title ?? "Untitled fashion story";
-              return {
-                title,
-                url: article.url ?? "#",
-                imageUrl: article.urlToImage ?? (await fetchPexelsImage(`${title} fashion editorial`, index + 1)),
-                sourceName: article.source?.name ?? "Fashion Desk",
-                excerpt: article.description ?? undefined,
-                content: article.description ?? undefined,
-              };
-            }),
-          );
-        }
-      }
-    } catch (error) {
-      console.error("NewsAPI curated source error:", error instanceof Error ? error.message : error);
-    }
-  }
-
-  if (newsDataKey) {
-    try {
-      const params = new URLSearchParams({
-        apikey: newsDataKey,
-        q: "fashion OR style OR runway OR couture",
-        language: "en",
-      });
-      const response = await fetch(`https://newsdata.io/api/1/news?${params.toString()}`, {
-        next: { revalidate: 60 * 30 },
-      });
-      if (response.ok) {
-        const data = (await response.json()) as {
-          results?: Array<{
-            title?: string;
-            description?: string | null;
-            image_url?: string | null;
-            category?: string[] | string | null;
-            keywords?: string[] | string | null;
-            source_id?: string;
-            source_name?: string;
-            link?: string;
-          }>;
-        };
-        const filtered = dedupeArticles(
-          (data.results ?? []).filter(isFashionArticle),
-          (article) => article.title,
-          (article) => article.image_url,
-        ).slice(0, 6);
-
-        if (filtered.length >= 3) {
-          return Promise.all(
-            filtered.map(async (article, index) => {
-              const title = article.title ?? "Untitled fashion story";
-              return {
-                title,
-                url: article.link ?? "#",
-                imageUrl: article.image_url ?? (await fetchPexelsImage(`${title} fashion editorial`, index + 1)),
-                sourceName: article.source_name ?? article.source_id ?? "Fashion Desk",
-                excerpt: article.description ?? undefined,
-                content: article.description ?? undefined,
-              };
-            }),
-          );
-        }
-      }
-    } catch (error) {
-      console.error("NewsData curated source error:", error instanceof Error ? error.message : error);
-    }
-  }
-
   const serperArticles = await fetchSerperCuratedArticles();
-  if (serperArticles.length > 0) return serperArticles;
-  console.log("All curated article sources failed; using fallbackCuratedArticles()");
+  if (serperArticles.length >= 3) return serperArticles;
+  console.log("Serper returned too few curated articles; using fallbackCuratedArticles()");
   return fallbackCuratedArticles();
 }
 
 export default async function DiscoverPage() {
-  const [curatedArticles, originalArticles, moments] = await Promise.all([
-    fetchFashionNews(),
-    generateFashlockOriginals(),
-    Promise.all(
-      historyMoments.map(async (moment, index) => {
-        const imageUrl = await fetchPexelsImage(moment.imageQuery, index + 1);
-        const content = articleBody(moment.fact, "FASHION HISTORY");
-        return {
-          year: moment.year,
-          fact: moment.fact,
-          topic: discoverArticleUrl({
-            title: moment.fact,
-            imageUrl,
-            source: "FASHION HISTORY",
-            tags: ["history", "archive", moment.year],
-          }),
-          imageUrl,
-          excerpt: previewText(content),
-          content,
-        };
-      }),
-    ),
-  ]);
+  // Reserved for a future Pulse layer; Fashion Explained now uses the curated slug-backed spine.
+  const curatedArticles = await fetchFashionNews();
 
   return (
     <FashlockDiscover
       className={`${cormorant.variable} ${dmSans.variable}`}
       curatedArticles={curatedArticles}
-      originalArticles={originalArticles}
-      moments={moments}
     />
   );
 }

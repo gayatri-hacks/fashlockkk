@@ -52,6 +52,8 @@ export type PredictPageData = {
 };
 
 const GEMINI_MODEL = "gemini-2.5-flash";
+const PREDICT_KEYWORD_LIMIT = 12;
+const PREDICT_MONTH_WINDOW = 9;
 
 const MARKET_META: Record<string, { market: string; flag: string }> = {
   IT: { market: "Italy", flag: "🇮🇹" },
@@ -290,22 +292,44 @@ const loadPredictPageUncached = async (): Promise<PredictPageData> => {
   const latestMonth = latestResult.data?.[0]?.month;
   if (!latestMonth) return { season, year, predictions: [], menswearPredictions: [], shift: null, globalHeat: [] };
 
-  const fromNineMonths = monthsAgo(latestMonth, 9);
+  const fromNineMonths = monthsAgo(latestMonth, PREDICT_MONTH_WINDOW);
+
+  const topKeywordResult = await supabase
+    .from("historical_trend_data")
+    .select("keyword_id, google_score")
+    .eq("market", "IN")
+    .eq("month", latestMonth)
+    .order("google_score", { ascending: false })
+    .limit(PREDICT_KEYWORD_LIMIT);
+
+  if (topKeywordResult.error) {
+    return { season, year, predictions: [], menswearPredictions: [], shift: null, globalHeat: [] };
+  }
+
+  const selectedKeywordIds = [
+    ...new Set((topKeywordResult.data ?? []).map((row) => row.keyword_id).filter((id): id is number => typeof id === "number")),
+  ].slice(0, PREDICT_KEYWORD_LIMIT);
+
+  if (!selectedKeywordIds.length) {
+    return { season, year, predictions: [], menswearPredictions: [], shift: null, globalHeat: [] };
+  }
 
   const [inRowsResult, allMarketResult, keywordsResult] = await Promise.all([
     supabase
       .from("historical_trend_data")
       .select("keyword_id, month, google_score, market")
       .eq("market", "IN")
+      .in("keyword_id", selectedKeywordIds)
       .gte("month", fromNineMonths)
       .order("month", { ascending: true })
-      .limit(100),
+      .limit(PREDICT_KEYWORD_LIMIT * PREDICT_MONTH_WINDOW),
     supabase
       .from("historical_trend_data")
       .select("keyword_id, month, google_score, market")
       .eq("month", latestMonth)
-      .limit(100),
-    supabase.from("trend_keywords").select("id, keyword").limit(600),
+      .in("keyword_id", selectedKeywordIds)
+      .limit(PREDICT_KEYWORD_LIMIT * Object.keys(MARKET_META).length),
+    supabase.from("trend_keywords").select("id, keyword").in("id", selectedKeywordIds),
   ]);
 
   if (inRowsResult.error || allMarketResult.error || keywordsResult.error) {

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { getSupabaseClient } from "@/lib/supabase";
+import { clearSupabaseCache, getSupabaseClient } from "@/lib/supabase";
+import { getAuthenticatedUserId } from "@/lib/supabase-auth";
 
-const USER_ID = "fashlock_user_1";
 const BUCKET = "wardrobe";
 const CATEGORIES = ["Tops", "Bottoms", "Dresses", "Outerwear", "Shoes", "Bags", "Accessories"];
 
@@ -83,6 +83,12 @@ No markdown, no explanation. Only valid JSON.`,
 }
 
 export async function GET() {
+  const userId = await getAuthenticatedUserId();
+
+  if (!userId) {
+    return NextResponse.json({ success: false, error: "Sign in to use your wardrobe" }, { status: 401 });
+  }
+
   const supabase = getSupabaseClient();
 
   if (!supabase) {
@@ -93,7 +99,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from("wardrobe_items")
     .select("id, image_url, category, color, name, tags, created_at")
-    .eq("user_id", USER_ID)
+    .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .range(0, pageSize - 1);
 
@@ -106,6 +112,12 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
+    const userId = await getAuthenticatedUserId();
+
+    if (!userId) {
+      return NextResponse.json({ success: false, error: "Sign in to upload wardrobe pieces" }, { status: 401 });
+    }
+
     const supabase = getSupabaseClient();
 
     if (!supabase) {
@@ -125,7 +137,7 @@ export async function POST(req: Request) {
     const mediaType = body.mediaType || "image/jpeg";
     const meta = await categoriseItem(body.imageBase64, mediaType);
     const extension = mediaType.includes("png") ? "png" : mediaType.includes("webp") ? "webp" : "jpg";
-    const path = `${USER_ID}/${Date.now()}-${crypto.randomUUID()}.${extension}`;
+    const path = `${userId}/${Date.now()}-${crypto.randomUUID()}.${extension}`;
 
     await supabase.storage.createBucket(BUCKET, { public: true }).catch(() => null);
 
@@ -145,7 +157,7 @@ export async function POST(req: Request) {
     const { data, error } = await supabase
       .from("wardrobe_items")
       .insert({
-        user_id: USER_ID,
+        user_id: userId,
         image_url: publicUrl,
         category: meta.category,
         color: meta.color,
@@ -159,6 +171,8 @@ export async function POST(req: Request) {
       throw new Error(error.message);
     }
 
+    clearSupabaseCache(`closet-gaps:${userId}`);
+
     return NextResponse.json({ success: true, item: data });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -167,6 +181,12 @@ export async function POST(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  const userId = await getAuthenticatedUserId();
+
+  if (!userId) {
+    return NextResponse.json({ success: false, error: "Sign in to edit your wardrobe" }, { status: 401 });
+  }
+
   const supabase = getSupabaseClient();
 
   if (!supabase) {
@@ -180,11 +200,13 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ success: false, error: "Missing id" }, { status: 400 });
   }
 
-  const { error } = await supabase.from("wardrobe_items").delete().eq("user_id", USER_ID).eq("id", id);
+  const { error } = await supabase.from("wardrobe_items").delete().eq("user_id", userId).eq("id", id);
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
+
+  clearSupabaseCache(`closet-gaps:${userId}`);
 
   return NextResponse.json({ success: true });
 }

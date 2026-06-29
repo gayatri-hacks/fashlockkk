@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getSupabaseClient } from "@/lib/supabase";
 import { getAuthenticatedUserId } from "@/lib/supabase-auth";
+import { LAILA_FASHION_INTELLIGENCE } from "@/lib/laila-fashion-intelligence";
+import { searchLailaStyleKnowledge } from "@/lib/laila-style-knowledge";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +75,16 @@ async function analyseImage(imageBase64: string, mimeType: string, gender: Gende
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
 
+  const knowledgeResult = await searchLailaStyleKnowledge(
+    "premium outfit analysis expensive colours skin tone proportion silhouette fabric quality",
+    gender,
+    8,
+    "style-analyse",
+  );
+  const knowledgeText = knowledgeResult.chunks
+    .map((item, index) => `${index + 1}. ${item.title}\nSource: ${item.source}\nCategory: ${item.category}\nTags: ${(item.category_tags || []).join(", ") || "none"}\n${String(item.content || "").slice(0, 700)}`)
+    .join("\n\n");
+
   const prompt = `You are Camille, a world-class stylist
 with an instinctive eye for personal 
 style. You can read a person's entire 
@@ -130,6 +142,25 @@ BE CAMILLE:
   why it works for THEIR specific body
   and colouring
 - Have a point of view
+
+BRAND KNOWLEDGE — WESTERN:
+- Entry luxury: COS, Arket, Sandro, Maje, & Other Stories.
+- Mid premium: Zara tailored and linen lines, Mango Committed, Massimo Dutti, Uniqlo linen, basics, cashmere.
+- Investment pieces: Toteme, A.P.C., Isabel Marant, Acne Studios, Jacquemus, Ganni.
+- Menswear specific: Oliver Spencer, NN07, Sunspel, Reiss, Tiger of Sweden.
+
+BRAND KNOWLEDGE — INDIAN PREMIUM:
+- Contemporary: Anita Dongre, Raw Mango, Anavila, Lovebirds, Bodice.
+- Occasion: Tarun Tahiliani, Manish Malhotra for heavy occasions, Rimzim Dadu, Gaurav Gupta.
+- Accessible premium: Indya, Libas basics, Kalki, Pernia's Pop-Up Shop.
+- Men ethnic: Manyavar, Sahil Beggarani, Raghavendra Rathore.
+- Avoid suggesting Meesho, Snapdeal, or unbranded Amazon listings.
+
+${LAILA_FASHION_INTELLIGENCE}
+
+YOUR KNOWLEDGE BASE:
+Here are relevant premium fashion intelligence chunks to use when judging fabric, colour, proportion and taste:
+${knowledgeText || "No matching premium style guide found. Use Laila's built-in fashion intelligence."}
 
 Respond in JSON only — no markdown:
 {
@@ -368,12 +399,7 @@ export async function POST(request: Request) {
 
     await saveDetectedProfile(userId, sessionId, gender, analysis);
 
-    const productGroups = await Promise.all(
-      analysis.shopTerms.map(async (term) => ({
-        term,
-        products: await searchProducts(term, gender),
-      })),
-    );
+    const productGroups: Array<{ term: string; products: Awaited<ReturnType<typeof searchProducts>> }> = [];
 
     return NextResponse.json({ analysis, productGroups });
   } catch (error) {

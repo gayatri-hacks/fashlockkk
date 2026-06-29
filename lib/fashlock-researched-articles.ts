@@ -10,7 +10,13 @@ export type ResearchSource = {
   summary: string;
 };
 
+export type ArticleSection = {
+  heading: string;
+  body: string;
+};
+
 export type ResearchedArticle = EditorialArticle & {
+  sections?: ArticleSection[];
   research_sources?: ResearchSource[];
   research_generated_at?: string | null;
   research_model?: string | null;
@@ -22,11 +28,13 @@ function hasResearchedBody(article: Partial<ResearchedArticle> | null | undefine
   const sourceTitles = article?.research_sources?.map((source) => source.title.toLowerCase()).join(" ") ?? "";
   const body = article?.full_content?.toLowerCase() ?? "";
   const hasBadResearchMatch = sourceTitles.includes("age of adaline") || body.includes("adaline");
+  const hasSections = Boolean(article?.sections?.length && article.sections.length >= 3);
 
   return Boolean(
     article?.full_content &&
       article.full_content.length > 1800 &&
       article.research_generated_at &&
+      hasSections &&
       !hasBadResearchMatch,
   );
 }
@@ -41,7 +49,7 @@ function cleanJson(text: string) {
 }
 
 function normalizeArticle(row: Partial<ResearchedArticle>, fallback: EditorialArticle): ResearchedArticle {
-  return {
+  const base = {
     ...fallback,
     ...row,
     tags: (row.tags as string[] | undefined) ?? fallback.tags,
@@ -49,6 +57,65 @@ function normalizeArticle(row: Partial<ResearchedArticle>, fallback: EditorialAr
     cover_image_url: row.cover_image_url ?? fallback.cover_image_url,
     research_sources: (row.research_sources as ResearchSource[] | undefined) ?? [],
   };
+
+  return {
+    ...base,
+    sections: normalizeSections(row.sections) ?? sectionsFromContent(base),
+  };
+}
+
+function normalizeSections(value: unknown): ArticleSection[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const sections = value
+    .filter((section) => typeof section === "object" && section !== null)
+    .map((section) => {
+      const record = section as Record<string, unknown>;
+      return {
+        heading: String(record.heading || "").replace(/\s+/g, " ").trim().slice(0, 90),
+        body: String(record.body || "").replace(/\n{3,}/g, "\n\n").trim(),
+      };
+    })
+    .filter((section) => section.heading && section.body.length >= 120)
+    .slice(0, 4);
+
+  return sections.length ? sections : undefined;
+}
+
+function sectionsFromContent(article: Pick<ResearchedArticle, "title" | "subtitle" | "content_excerpt" | "full_content" | "content" | "culture_reference" | "region" | "era">): ArticleSection[] {
+  const body = article.full_content || article.content || article.content_excerpt || article.subtitle;
+  const paragraphs = body
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+
+  if (paragraphs.length >= 3) {
+    const headings = [
+      "The Meaning Beneath the Surface",
+      `Why It Belongs to ${article.region || "Now"}`,
+      "How to Read It Now",
+      "The Style Lesson",
+    ];
+    return paragraphs.slice(0, 4).map((paragraph, index) => ({
+      heading: headings[index] ?? "The Style Lesson",
+      body: paragraph,
+    }));
+  }
+
+  return [
+    {
+      heading: "The Meaning Beneath the Surface",
+      body: `${article.content_excerpt || article.subtitle} This is the useful starting point: the story is not only about a garment or an aesthetic, but about the way fashion turns memory, body language, and social codes into something visible. ${article.title} matters because it gives a name to an instinct people already recognise when they dress.`,
+    },
+    {
+      heading: `Why It Belongs to ${article.region || "Now"}`,
+      body: `In ${article.region || "its cultural context"}, the reference carries more than surface beauty. It gathers climate, ritual, movement, and expectation into one visual system. The details that look decorative from a distance are usually functional up close: a way of controlling proportion, signalling polish, or letting the wearer decide how much tradition and modernity should appear in the same look.`,
+    },
+    {
+      heading: "How to Read It Now",
+      body: `The modern version works best when it is not treated as costume. Keep the emotional code, then sharpen the styling around it: cleaner lines, fewer competing details, and one deliberate point of contrast. That is where the idea becomes wearable rather than archived, a language a person can translate into their own wardrobe instead of copying literally.`,
+    },
+  ];
 }
 
 async function fetchWikipediaSource(query: string): Promise<ResearchSource | null> {
@@ -211,7 +278,13 @@ ${sourceNotes}
 Return only JSON with this exact shape:
 {
   "content_excerpt": "Why it matters: one strong sentence.",
-  "full_content": "5 to 7 polished paragraphs separated by two newline characters. 750-950 words. Cinematic, specific, useful, and grounded. Explain history, cultural meaning, why it matters now, and how a reader can translate the idea into their style without sounding like a shopping app. Do not mention fictional films, fictional characters, or unrelated pop-culture examples unless they are explicitly present in the article brief."
+  "full_content": "A strong opening hook plus 3 to 4 thematic sections as polished paragraphs separated by two newline characters. 550-750 words total. Cinematic, specific, useful, and grounded. Explain history, cultural meaning, why it matters now, and how a reader can translate the idea into their style without sounding like a shopping app. Do not mention fictional films, fictional characters, or unrelated pop-culture examples unless they are explicitly present in the article brief.",
+  "sections": [
+    {
+      "heading": "specific editorial heading, no markdown",
+      "body": "100-180 words. Build on the why-it-matters frame with concrete fashion, body, cultural, historical, sensory, and styling detail. Do not repeat the summary."
+    }
+  ]
 }`;
 
   try {
@@ -242,12 +315,15 @@ Return only JSON with this exact shape:
     const parsed = JSON.parse(cleanJson(text)) as {
       content_excerpt?: string;
       full_content?: string;
+      sections?: unknown;
     };
-    if (!parsed.full_content || parsed.full_content.length < 900) return null;
+    const sections = normalizeSections(parsed.sections);
+    if (!parsed.full_content || parsed.full_content.length < 900 || !sections || sections.length < 3) return null;
     return {
       content_excerpt: parsed.content_excerpt,
       full_content: parsed.full_content,
-    } as { content_excerpt?: string; full_content: string };
+      sections,
+    } as { content_excerpt?: string; full_content: string; sections: ArticleSection[] };
   } catch {
     return null;
   }
@@ -260,7 +336,7 @@ async function loadRemoteArticle(slug: string, fallback: EditorialArticle) {
   try {
     const { data, error } = await supabase
       .from("editorial_articles")
-      .select("id, title, subtitle, slug, cover_image_url, category, tags, archetypes, reading_time, author, published_date, mood, era, region, culture_reference, visual_prompt, content_excerpt, content, full_content, source_type, image_strategy, is_featured, research_sources, research_generated_at, research_model")
+      .select("id, title, subtitle, slug, cover_image_url, category, tags, archetypes, reading_time, author, published_date, mood, era, region, culture_reference, visual_prompt, content_excerpt, content, full_content, sections, source_type, image_strategy, is_featured, research_sources, research_generated_at, research_model")
       .eq("slug", slug)
       .limit(1)
       .maybeSingle();
@@ -295,6 +371,7 @@ async function saveResearchedArticle(article: ResearchedArticle) {
     content_excerpt: article.content_excerpt,
     content: article.content_excerpt,
     full_content: article.full_content,
+    sections: article.sections ?? sectionsFromContent(article),
     source_type: "original",
     image_strategy: article.image_strategy,
     is_featured: article.is_featured,
@@ -306,7 +383,8 @@ async function saveResearchedArticle(article: ResearchedArticle) {
   try {
     await supabase.from("editorial_articles").upsert(payload, { onConflict: "slug" });
   } catch {
-    const { research_sources, research_generated_at, research_model, ...withoutResearchColumns } = payload;
+    const { sections, research_sources, research_generated_at, research_model, ...withoutResearchColumns } = payload;
+    void sections;
     void research_sources;
     void research_generated_at;
     void research_model;
@@ -338,6 +416,7 @@ async function loadOrGenerateFashlockArticleUncached(slug: string): Promise<Rese
     content_excerpt: generated.content_excerpt ?? base.content_excerpt,
     content: generated.content_excerpt ?? base.content_excerpt,
     full_content: generated.full_content,
+    sections: generated.sections,
     research_sources: sources,
     research_generated_at: new Date().toISOString(),
     research_model: GEMINI_MODEL,
@@ -347,7 +426,7 @@ async function loadOrGenerateFashlockArticleUncached(slug: string): Promise<Rese
   return researchedArticle;
 }
 
-export const loadOrGenerateFashlockArticle = unstable_cache(loadOrGenerateFashlockArticleUncached, ["fashlock-researched-article-v2"], {
+export const loadOrGenerateFashlockArticle = unstable_cache(loadOrGenerateFashlockArticleUncached, ["fashlock-researched-article-v3"], {
   revalidate: 60 * 60,
   tags: ["editorial"],
 });

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSupabaseClient, logSupabaseFallback, supabaseCache, supabaseCacheTtl } from "@/lib/supabase";
+import { clearSupabaseCache, getSupabaseClient, logSupabaseFallback, supabaseCache, supabaseCacheTtl } from "@/lib/supabase";
 import { getAuthenticatedUserId } from "@/lib/supabase-auth";
 
 export const dynamic = "force-dynamic";
@@ -61,6 +61,9 @@ export async function DELETE(request: Request) {
     console.error("style profile delete failed:", error.message);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  clearSupabaseCache(`style-profile-route:${userId || sessionId}`);
+  clearSupabaseCache(`style-profile:${userId || sessionId}`);
 
   return NextResponse.json({ deleted: true });
 }
@@ -142,6 +145,9 @@ export async function POST(request: Request) {
       console.error("style profile upsert failed:", error.message);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+    clearSupabaseCache(`style-profile-route:${userId || sessionId}`);
+    clearSupabaseCache(`style-profile:${userId || sessionId}`);
 
     return NextResponse.json({ profile: data });
   } catch (error) {

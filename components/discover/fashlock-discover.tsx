@@ -3,6 +3,9 @@
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { CompleteYourClosetCard } from "@/components/discover/complete-your-closet-card";
+import { FashionExplainedSection } from "@/components/discover/fashion-explained-section";
+import { ForYouSection } from "@/components/discover/for-you-section";
 import { cn } from "@/lib/utils";
 
 export type FashlockArticle = {
@@ -15,20 +18,9 @@ export type FashlockArticle = {
   year?: string;
 };
 
-export type FashlockMoment = {
-  year: string;
-  fact: string;
-  imageUrl: string | null;
-  topic?: string;
-  excerpt?: string;
-  content?: string;
-};
-
 type FashlockDiscoverProps = {
   className?: string;
   curatedArticles: FashlockArticle[];
-  originalArticles: FashlockArticle[];
-  moments: FashlockMoment[];
 };
 
 type SearchPayload = {
@@ -60,36 +52,6 @@ type DataStory = {
   peakYear: number;
   isRising: boolean;
   imageUrl?: string | null;
-};
-
-type DesignerItem = {
-  name: string;
-  imageUrl: string | null;
-  legacy: string;
-  aesthetic: string[];
-  era: string;
-};
-
-type CityItem = {
-  market: string;
-  city: string;
-  keywords: string[];
-  imageUrl: string | null;
-  mood: string;
-};
-
-const cardVariants = {
-  hidden: { opacity: 0, y: 18 },
-  show: { opacity: 1, y: 0 },
-};
-
-const gridVariants = {
-  hidden: {},
-  show: {
-    transition: {
-      staggerChildren: 0.09,
-    },
-  },
 };
 
 function ImageBlock({
@@ -418,39 +380,15 @@ function useDiscoverApi<T>(path: string, key: string) {
 
 function EventsSection() {
   const { data, loading } = useDiscoverApi<EventItem[]>("/api/discover/events", "events");
+  const featuredEvent = useMemo(() => pickFeaturedEvent(data ?? []), [data]);
   if (!loading && !data?.length) return null;
   return (
     <SectionShell label="NOW" title="The fashion world, right now" subtitle="Live events, shows and moments happening globally">
       {loading ? (
-        <div className="flex gap-5 overflow-hidden">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-[260px] w-[280px] shrink-0" />)}</div>
-      ) : (
-        <div className="flex gap-5 overflow-x-auto scrollbar-none">
-          {data?.map((event) => {
-            const badge = eventBadge(event.date);
-
-            return (
-              <Link
-                key={`${event.name}-${event.date}`}
-                href={eventArticleUrl(event)}
-                className="block w-[280px] shrink-0 cursor-pointer overflow-hidden rounded-[2px] border border-[#D4C8BC] bg-[#F0EBE3] no-underline transition duration-300 ease-in-out hover:-translate-y-[3px] hover:shadow-[0_8px_32px_rgba(44,36,24,0.1)]"
-                style={{ borderWidth: 0.5 }}
-              >
-                <ImageBlock src={event.imageUrl} alt={event.name} className="h-40" />
-                <div className="p-4">
-                  {badge ? (
-                    <p className="mb-3 text-[8px] font-[300] uppercase tracking-[4px]" style={{ color: badge.color }}>
-                      {badge.label}
-                    </p>
-                  ) : null}
-                  <h3 className="text-[18px] leading-tight text-[#2C2418] [font-family:var(--font-fashlock-display)]">{event.name}</h3>
-                  <p className="mt-2 text-[9px] font-[200] uppercase tracking-[2px] text-[#8C7B6E]">{event.city} · {event.date}</p>
-                  <p className="mt-3 text-[11px] font-[300] leading-5 text-[#8C7B6E]">{event.description}</p>
-                </div>
-              </Link>
-            );
-          })}
-        </div>
-      )}
+        <Skeleton className="h-[260px] max-w-[640px]" />
+      ) : featuredEvent ? (
+        <EventCard event={featuredEvent} />
+      ) : null}
     </SectionShell>
   );
 }
@@ -481,7 +419,7 @@ function DataStoriesSection() {
                   {story.isRising ? "RISING NOW" : "CYCLING BACK"}
                 </span>
                 <h3 className="relative z-[1] mt-2 text-[32px] italic leading-[1.2] text-[#2C2418] [font-family:var(--font-fashlock-display)]">
-                  {story.headline}
+                  {renderInlineEmphasis(story.headline)}
                 </h3>
                 <p className="pointer-events-none absolute bottom-5 right-8 z-0 text-[64px] font-[200] leading-none text-[#E8E0D4] [font-family:var(--font-fashlock-display)]">
                   {story.peakYear}
@@ -511,75 +449,6 @@ function DataStoriesSection() {
   );
 }
 
-function DesignersSection() {
-  const { data, loading } = useDiscoverApi<DesignerItem[]>("/api/discover/designers", "designers");
-  if (!loading && !data?.length) return null;
-  return (
-    <SectionShell label="DESIGNERS" title="The designers who changed everything">
-      {loading ? (
-        <div className="flex gap-8 overflow-hidden">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-[290px] w-[200px] shrink-0 rounded-full" />)}</div>
-      ) : (
-        <div className="flex gap-8 overflow-x-auto scrollbar-none">
-          {data?.map((designer) => (
-            <article key={designer.name} className="w-[200px] shrink-0 text-center">
-              <div className="group relative h-[200px] overflow-hidden rounded-full bg-[#E8E0D4]">
-                <ImageBlock src={designer.imageUrl} alt={designer.name} className="h-full" />
-                <div className="absolute inset-0 flex items-center justify-center bg-[rgba(44,36,24,0.7)] px-6 text-center opacity-0 transition group-hover:opacity-100">
-                  <p className="text-[12px] italic leading-5 text-[#F0EBE3] [font-family:var(--font-fashlock-display)]">{designer.legacy}</p>
-                </div>
-              </div>
-              <h3 className="mt-4 text-[16px] text-[#2C2418] [font-family:var(--font-fashlock-display)]">{designer.name}</h3>
-              <p className="mt-1 text-[9px] font-[200] uppercase tracking-[2px] text-[#8C7B6E]">{designer.era}</p>
-              <p className="mt-2 text-[9px] font-[300] uppercase tracking-[2px] text-[#B03A5B]">{designer.aesthetic.join(" · ")}</p>
-            </article>
-          ))}
-        </div>
-      )}
-    </SectionShell>
-  );
-}
-
-function CitiesSection() {
-  const { data, loading } = useDiscoverApi<CityItem[]>("/api/discover/cities", "cities");
-  if (!loading && !data?.length) return null;
-  return (
-    <SectionShell label="GLOBAL HEAT" title="12 cities. One planet. Right now.">
-      {loading ? (
-        <div className="grid gap-5 md:grid-cols-3">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-64" />)}</div>
-      ) : (
-        <div className="grid gap-5 md:grid-cols-3">
-          {data?.map((city) => (
-            <article key={city.market} className="rounded-[2px] border border-[#D4C8BC] bg-[#F0EBE3]" style={{ borderWidth: 0.5 }}>
-              <ImageBlock src={city.imageUrl} alt={`${city.city} street style`} className="h-[120px]" />
-              <div className="p-4">
-                <h3 className="text-[20px] text-[#2C2418] [font-family:var(--font-fashlock-display)]">{city.city}</h3>
-                <p className="mt-2 text-[11px] font-[300] leading-5 text-[#8C7B6E]">{city.mood}</p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {city.keywords.map((keyword) => (
-                    <span key={keyword} className="rounded-full bg-[#E8E0D4] px-2 py-1 text-[8px] font-[300] text-[#8C7B6E]">{keyword}</span>
-                  ))}
-                </div>
-              </div>
-            </article>
-          ))}
-        </div>
-      )}
-    </SectionShell>
-  );
-}
-
-function firstSentences(value: string | undefined, count = 2) {
-  const text = value?.replace(/\s+/g, " ").trim();
-  if (!text) return "";
-  const sentences = text.match(/[^.!?]+[.!?]+/g);
-  return (sentences?.slice(0, count).join(" ") || text).trim();
-}
-
-function readTime(value: string | undefined) {
-  const words = value?.trim().split(/\s+/).filter(Boolean).length ?? 0;
-  return `${Math.max(1, Math.ceil(words / 200))} min read`;
-}
-
 function slugify(value: string) {
   return value
     .toLowerCase()
@@ -601,10 +470,23 @@ function eventArticleUrl(event: EventItem) {
   return `/discover/article/${slugify(event.name)}?${params.toString()}`;
 }
 
+function stripInlineEmphasis(value: string) {
+  return value.replace(/\*([^*]+)\*/g, "$1").replace(/_([^_]+)_/g, "$1").trim();
+}
+
+function renderInlineEmphasis(value: string) {
+  const parts = value.split(/(\*[^*]+\*|_[^_]+_)/g).filter(Boolean);
+  return parts.map((part, index) => {
+    const match = part.match(/^([*_])(.+)\1$/);
+    return match ? <em key={`${part}-${index}`}>{match[2]}</em> : part;
+  });
+}
+
 function dataStoryArticleUrl(story: DataStory) {
+  const headline = stripInlineEmphasis(story.headline);
   const content = [story.insight, story.meaning].filter(Boolean).join("\n\n");
   const params = new URLSearchParams({
-    title: story.headline,
+    title: headline,
     content,
     source: "FASHION DATA · FASHLOCK",
     type: "data-story",
@@ -612,7 +494,7 @@ function dataStoryArticleUrl(story: DataStory) {
   });
   if (story.imageUrl) params.set("imageUrl", story.imageUrl);
 
-  return `/discover/article/${slugify(story.headline)}?${params.toString()}`;
+  return `/discover/article/${slugify(headline)}?${params.toString()}`;
 }
 
 function parseEventDate(date: string) {
@@ -648,140 +530,97 @@ function eventBadge(date: string) {
   return null;
 }
 
-function articleUrl(article: FashlockArticle) {
-  const description = article.excerpt || article.content || "";
-  const params = new URLSearchParams({
-    title: article.title,
-    source: article.sourceName,
-    description,
-    content: article.content || description,
-  });
+function pickFeaturedEvent(events: EventItem[]) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
 
-  if (article.imageUrl) params.set("imageUrl", article.imageUrl);
-  if (article.url && !article.url.startsWith("/discover/article/") && article.url !== "#") {
-    params.set("url", article.url);
-  }
-  if (article.year) params.set("year", article.year);
-
-  const tags = [article.sourceName, article.year].filter(Boolean);
-  if (tags.length) params.set("tags", tags.join(","));
-
-  return `/discover/article/${slugify(article.title)}?${params.toString()}`;
+  return [...events]
+    .map((event, index) => {
+      const eventDate = parseEventDate(event.date);
+      const timestamp = eventDate ? new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate()).getTime() : Number.POSITIVE_INFINITY;
+      return {
+        event,
+        index,
+        distance: Number.isFinite(timestamp) ? Math.abs(timestamp - today) : Number.POSITIVE_INFINITY,
+        isUpcoming: Number.isFinite(timestamp) && timestamp >= today,
+      };
+    })
+    .sort((a, b) => {
+      if (a.isUpcoming !== b.isUpcoming) return a.isUpcoming ? -1 : 1;
+      if (a.distance !== b.distance) return a.distance - b.distance;
+      return a.index - b.index;
+    })[0]?.event ?? null;
 }
 
-function ArticleReadLink({ article }: { article: FashlockArticle }) {
-  const className =
-    "group/read relative text-[11px] font-[300] text-[#B03A5B] after:absolute after:-bottom-1 after:left-0 after:h-px after:w-0 after:bg-[#B03A5B] after:transition-all after:duration-200 after:ease-in-out hover:after:w-full";
+function EventCard({ event }: { event: EventItem }) {
+  const badge = eventBadge(event.date);
 
   return (
-    <Link href={articleUrl(article)} className={className}>
-      Read →
+    <Link
+      href={eventArticleUrl(event)}
+      className="grid max-w-[720px] overflow-hidden rounded-[2px] border border-[#D4C8BC] bg-[#F0EBE3] text-[#2C2418] no-underline transition duration-300 ease-in-out hover:-translate-y-[3px] hover:shadow-[0_8px_32px_rgba(44,36,24,0.1)] md:grid-cols-[240px_1fr]"
+      style={{ borderWidth: 0.5 }}
+    >
+      <ImageBlock src={event.imageUrl} alt={event.name} className="h-40 md:h-full" />
+      <div className="p-5 md:p-6">
+        {badge ? (
+          <p className="mb-3 text-[8px] font-[300] uppercase tracking-[4px]" style={{ color: badge.color }}>
+            {badge.label}
+          </p>
+        ) : null}
+        <h3 className="text-[24px] leading-tight text-[#2C2418] [font-family:var(--font-fashlock-display)]">{event.name}</h3>
+        <p className="mt-2 text-[9px] font-[200] uppercase tracking-[2px] text-[#8C7B6E]">{event.city} · {event.date}</p>
+        <p className="mt-4 text-[12px] font-[300] leading-6 text-[#8C7B6E]">{event.description}</p>
+      </div>
     </Link>
   );
 }
 
-function ArticleCard({
-  article,
-  exclusiveBadge = false,
-  hero = false,
-}: {
-  article: FashlockArticle;
-  exclusiveBadge?: boolean;
-  hero?: boolean;
-}) {
-  const preview = firstSentences(article.excerpt || article.content, 2);
-  const bodyForReading = article.content || article.excerpt || article.title;
+function NewsStrip({ articles }: { articles: FashlockArticle[] }) {
+  const newsArticles = articles
+    .filter((article) => article.url && article.url !== "#")
+    .slice(0, 5);
+
+  if (newsArticles.length < 2) return null;
 
   return (
-    <motion.article
-      variants={cardVariants}
-      transition={{ duration: 0.3, ease: "easeOut" }}
-      whileHover={{ y: -3, boxShadow: "0 8px 32px rgba(44,36,24,0.1)" }}
-      className="overflow-hidden rounded-[2px] bg-[#F0EBE3] shadow-[0_2px_20px_rgba(44,36,24,0.04)] transition duration-300 ease-in-out"
-    >
-      <div className={cn("relative overflow-hidden rounded-t-[2px]", hero ? "h-[320px]" : "h-[220px]")}>
-        <ImageBlock src={article.imageUrl} alt={article.title} className="h-full w-full rounded-t-[2px]" />
-        {exclusiveBadge ? (
-          <span className="absolute right-3 top-3 rounded-[20px] bg-[#F4DCE4] px-[10px] py-[3px] text-[7px] font-[300] uppercase tracking-[3px] text-[#B03A5B]">
-            FASHLOCK EXCLUSIVE
-          </span>
-        ) : null}
-      </div>
-      <div className="bg-[#F0EBE3] px-6 pb-6 pt-5">
-        <p className="text-[8px] font-[200] uppercase tracking-[4px] text-[#B03A5B]">
-          {article.sourceName}
+    <section className="border-t border-[#E8DCD2] bg-[#FAF7F4] px-5 py-8 md:px-[120px]" style={{ borderTopWidth: 0.5 }}>
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <p className="text-[9px] font-[200] uppercase tracking-[0.28em] text-[#B03A5B]">
+          IN THE NEWS
         </p>
-        <h3
-          className="mb-[10px] mt-2 text-[22px] font-[400] leading-[1.35] text-[#2C2418] [font-family:var(--font-fashlock-display)]"
-          style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
-        >
-          {article.title}
-        </h3>
-        <p
-          className="mb-[14px] text-[12px] font-[300] leading-[1.7] text-[#8C7B6E]"
-          style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}
-        >
-          {preview || "A Fashlock reading of the fashion signal, its mood, and why it matters now."}
-        </p>
-        <div className="flex items-center justify-between">
-          <p className="text-[9px] font-[200] text-[#C4B4A6]">{readTime(bodyForReading)}</p>
-          <ArticleReadLink article={article} />
-        </div>
+        <span className="hidden h-px flex-1 bg-[#E8DCD2] md:block" />
       </div>
-    </motion.article>
-  );
-}
-
-function ArticleGrid({
-  articles,
-  emptyText,
-  exclusiveBadge = false,
-  layout = "curated",
-}: {
-  articles: FashlockArticle[];
-  emptyText: string;
-  exclusiveBadge?: boolean;
-  layout?: "curated" | "originals";
-}) {
-  if (articles.length === 0) {
-    return (
-      <p className="mt-8 max-w-xl text-sm leading-7 text-[#7A6F65]">
-        {emptyText}
-      </p>
-    );
-  }
-
-  return (
-    <motion.div
-      variants={gridVariants}
-      initial="hidden"
-      whileInView="show"
-      viewport={{ once: true, margin: "-80px" }}
-      className={cn("mt-8", layout === "originals" ? "grid gap-6 md:grid-cols-2" : "space-y-6")}
-    >
-      {layout === "curated" ? (
-        <>
-          {articles[0] ? <ArticleCard article={articles[0]} hero /> : null}
-          <div className="grid gap-6 md:grid-cols-3">
-            {articles.slice(1, 6).map((article, index) => (
-              <ArticleCard key={`${article.title}-${index}`} article={article} />
-            ))}
-          </div>
-        </>
-      ) : (
-        articles.slice(0, 6).map((article, index) => (
-          <ArticleCard key={`${article.title}-${index}`} article={article} exclusiveBadge={exclusiveBadge} />
-        ))
-      )}
-    </motion.div>
+      <div className="scrollbar-none flex gap-3 overflow-x-auto pb-2 md:grid md:grid-cols-5 md:overflow-visible md:pb-0">
+        {newsArticles.map((article) => (
+          <a
+            key={`${article.title}-${article.url}`}
+            href={article.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group flex min-h-[112px] w-[230px] shrink-0 flex-col justify-between rounded-[2px] border border-[#E4D7CC] bg-[#F0EBE3] p-4 text-[#2C2418] no-underline transition duration-200 hover:border-[#B03A5B] md:w-auto"
+            style={{ borderWidth: 0.5 }}
+          >
+            <span
+              className="text-[13px] font-[300] leading-5 text-[#2C2418]"
+              style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+            >
+              {article.title}
+            </span>
+            <span className="mt-4 flex items-center justify-between gap-3 text-[9px] font-[200] uppercase tracking-[2px] text-[#8C7B6E]">
+              <span className="truncate">{article.sourceName}</span>
+              <span className="text-[14px] text-[#B03A5B] transition group-hover:translate-x-0.5">↗</span>
+            </span>
+          </a>
+        ))}
+      </div>
+    </section>
   );
 }
 
 export function FashlockDiscover({
   className,
   curatedArticles,
-  originalArticles,
-  moments,
 }: FashlockDiscoverProps) {
   return (
     <div
@@ -794,58 +633,18 @@ export function FashlockDiscover({
       <main>
         <FashionSearch />
 
-        <EventsSection />
+        <ForYouSection />
+        <CompleteYourClosetCard />
 
-        <SectionShell label="THIS WEEK" title="Curated this week">
-          <p className="mb-5 text-[9px] font-[200] uppercase tracking-[3px] text-[#B03A5B]">
-            CURATED FOR YOUR DISCOVER FEED
-          </p>
-          <p className="max-w-2xl text-sm leading-7 text-[#8C7B6E]">
-            Live fashion stories selected from current news signals, rewritten inside Fashlock when you read.
-          </p>
-          <ArticleGrid
-            articles={curatedArticles}
-            emptyText="No strong fashion news signals are available right now. Check back shortly."
-          />
-        </SectionShell>
+        <EventsSection />
 
         <DataStoriesSection />
 
-        <SectionShell label="ORIGINALS" title="FASHLOCK originals">
-          <p className="max-w-2xl text-sm leading-7 text-[#8C7B6E]">
-            Original editorial angles generated from this week’s fashion conversation.
-          </p>
-          <ArticleGrid
-            articles={originalArticles}
-            emptyText="Original editorial angles are being prepared."
-            exclusiveBadge
-            layout="originals"
-          />
-        </SectionShell>
+        <FashionExplainedSection />
 
-        <DesignersSection />
+        {/* TODO: fold lag/regional angle into Fashion Explained per discover redesign spec */}
 
-        <CitiesSection />
-
-        <SectionShell label="ARCHIVE" title="Fashion has a memory" subtitle="The moments that changed everything">
-          <div className="scrollbar-none mt-8 flex snap-x gap-5 overflow-x-auto pb-4">
-            {moments.map((moment) => (
-              <div key={moment.year} className="w-[300px] shrink-0 snap-start md:w-[340px]">
-                <ArticleCard
-                  article={{
-                    title: moment.fact,
-                    url: moment.topic ?? "#",
-                    imageUrl: moment.imageUrl,
-                    sourceName: "FASHION HISTORY",
-                    excerpt: moment.excerpt,
-                    content: moment.content,
-                    year: moment.year,
-                  }}
-                />
-              </div>
-            ))}
-          </div>
-        </SectionShell>
+        <NewsStrip articles={curatedArticles} />
       </main>
     </div>
   );

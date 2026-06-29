@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { DM_Sans, Cormorant_Garamond } from 'next/font/google'
 import TrendsOverview from '@/components/trends/trends-overview'
 import TrendDeepDive from '@/components/trends/trend-deep-dive'
@@ -40,6 +40,8 @@ export type TrendData = {
 export default function TrendsPage() {
   const [activeTrend, setActiveTrend] = useState<TrendData | null>(null)
   const [fadeOut, setFadeOut] = useState(false)
+  const [initialSearchQuery, setInitialSearchQuery] = useState('')
+  const initialSearchHandled = useRef(false)
 
   const handleTrendClick = (trend: TrendData) => {
     setFadeOut(true)
@@ -50,7 +52,7 @@ export default function TrendsPage() {
     }, 300)
   }
 
-  const handleTrendSearch = async (query: string) => {
+  const handleTrendSearch = useCallback(async (query: string) => {
     const cleaned = query.trim()
     if (!cleaned) return
 
@@ -73,7 +75,18 @@ export default function TrendsPage() {
     } finally {
       setFadeOut(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    if (initialSearchHandled.current) return
+    initialSearchHandled.current = true
+
+    const searchQuery = new URLSearchParams(window.location.search).get('search')?.trim()
+    if (!searchQuery) return
+
+    setInitialSearchQuery(searchQuery)
+    void handleTrendSearch(searchQuery)
+  }, [handleTrendSearch])
 
   const handleBackClick = () => {
     setFadeOut(true)
@@ -98,7 +111,7 @@ export default function TrendsPage() {
         {activeTrend ? (
           <TrendDeepDive trend={activeTrend} onBack={handleBackClick} />
         ) : (
-          <TrendsOverview onTrendClick={handleTrendClick} onTrendSearch={handleTrendSearch} />
+          <TrendsOverview initialSearchQuery={initialSearchQuery} onTrendClick={handleTrendClick} onTrendSearch={handleTrendSearch} />
         )}
       </div>
     </div>

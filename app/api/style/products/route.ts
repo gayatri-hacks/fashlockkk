@@ -2,7 +2,7 @@ import { unstable_cache } from "next/cache";
 import { NextResponse } from "next/server";
 import { classifyStyleQuery, siteFilter } from "@/lib/style-query-classifier";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 7200;
 
 type ProductCategory = "ethnic" | "western" | "activewear" | "premium" | "street";
 type ProductGender = "female" | "male";
@@ -30,49 +30,59 @@ function normalizeGender(value: unknown): ProductGender {
 async function searchProducts(searchQuery: string, category: ProductCategory, gender: ProductGender) {
   const key = process.env.SERPER_API_KEY;
   if (!key) return [];
+  const apiKey = key;
   const classification = await classifyStyleQuery(searchQuery);
   const filteredQuery =
     classification.type === "fusion"
       ? searchQuery
       : `${searchQuery} ${siteFilter(classification.premiumSites)}`;
 
-  const response = await fetch("https://google.serper.dev/shopping", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-KEY": key,
-    },
-    body: JSON.stringify({
-      q: filteredQuery,
-      gl: classification.searchRegion,
-      hl: "en",
-      num: 6,
-    }),
-  });
+  async function fetchShopping(q: string, gl: string) {
+    const response = await fetch("https://google.serper.dev/shopping", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-KEY": apiKey,
+      },
+      body: JSON.stringify({
+        q,
+        gl,
+        hl: "en",
+        num: 6,
+      }),
+    });
 
-  if (!response.ok) {
-    console.error("Serper style products failed:", response.status, await response.text());
-    return [];
+    if (!response.ok) {
+      console.error("Serper style products failed:", response.status, await response.text());
+      return [];
+    }
+
+    const data = (await response.json()) as { shopping?: SerperShoppingItem[] };
+    return data.shopping ?? [];
   }
 
-  const data = (await response.json()) as { shopping?: SerperShoppingItem[] };
+  const normalizeProducts = (items: SerperShoppingItem[]) =>
+    items
+      .filter((item) => item.title && item.price && item.imageUrl && item.link)
+      .filter((item) => !/\b(meesho|snapdeal|wholesale|bulk)\b/i.test(`${item.title} ${item.link} ${item.source}`))
+      .slice(0, 4)
+      .map((item) => ({
+        title: item.title ?? "Product",
+        price: item.price ?? "",
+        imageUrl: item.imageUrl ?? "",
+        link: item.link ?? "",
+        source: item.source ?? "Retailer",
+      }));
 
-  return (data.shopping ?? [])
-    .filter((item) => item.title && item.price && item.imageUrl && item.link)
-    .filter((item) => !/\b(meesho|snapdeal|wholesale|bulk)\b/i.test(`${item.title} ${item.link} ${item.source}`))
-    .slice(0, 4)
-    .map((item) => ({
-      title: item.title ?? "Product",
-      price: item.price ?? "",
-      imageUrl: item.imageUrl ?? "",
-      link: item.link ?? "",
-      source: item.source ?? "Retailer",
-    }));
+  const filteredProducts = normalizeProducts(await fetchShopping(filteredQuery, classification.searchRegion));
+  if (filteredProducts.length || classification.type === "fusion") return filteredProducts;
+
+  return normalizeProducts(await fetchShopping(searchQuery, "in"));
 }
 
 const cachedSearchProducts = unstable_cache(
   searchProducts,
-  ["style-products-region-shopping-v1"],
+  ["style-products-region-shopping-v2-empty-fallback"],
   { revalidate: 60 * 60 * 2 },
 );
 

@@ -6,10 +6,22 @@ export const maxDuration = 300;
 
 const FETCH_TIMEOUT_MS = 7000;
 const ARTICLE_TIMEOUT_MS = 4500;
-const MAX_ITEMS_PER_RUN = 650;
-const ARTICLE_RESULTS_PER_QUERY = 8;
+const MAX_ITEMS_PER_RUN = 500;
+const ARTICLE_RESULTS_PER_QUERY = 10;
 const QUERY_BATCH_SIZE = 10;
 const BATCH_DELAY_MS = 500;
+const FULL_ARTICLE_TEXT_LIMIT = 12000;
+
+type PremiumCategory =
+  | "runway_designer"
+  | "fabric_construction"
+  | "colour_theory"
+  | "proportion_silhouette"
+  | "fashion_culture_taste"
+  | "indian_premium_fashion"
+  | "menswear_premium";
+
+type KnowledgeCategory = "body_type" | "colour" | "occasion" | "capsule" | "mens" | "womens" | "general";
 
 function scraperDisabledResponse() {
   return NextResponse.json(
@@ -21,12 +33,29 @@ function scraperDisabledResponse() {
   );
 }
 
+function unauthorizedResponse() {
+  return NextResponse.json(
+    {
+      ok: false,
+      error: "Unauthorized style knowledge scraper request.",
+    },
+    { status: 401 },
+  );
+}
+
+function isAuthorizedScraperRequest(request: Request) {
+  const secret = process.env.STYLE_SCRAPER_SECRET;
+  const provided = request.headers.get("x-style-scraper-secret");
+  return Boolean(secret && provided && provided === secret);
+}
+
 type KnowledgeItem = {
   source: string;
   source_url: string;
   title: string;
   content: string;
-  category: "body_type" | "colour" | "occasion" | "capsule" | "mens" | "womens" | "general";
+  category: KnowledgeCategory;
+  category_tags?: string[];
   gender: "male" | "female" | "both";
 };
 
@@ -39,7 +68,72 @@ const redditSources = [
   { subreddit: "desifashion", gender: "both" as const },
 ];
 
-const articleQueries: Array<{ query: string; results?: number }> = [
+const premiumQueryGroups: Record<PremiumCategory, string[]> = {
+  runway_designer: [
+    "Vogue runway review season analysis designer collection meaning",
+    "Business of Fashion designer philosophy aesthetic",
+    "site:businessoffashion.com fashion analysis style",
+    "site:vogue.com runway review collection analysis",
+    "site:vogue.it runway collection review analysis",
+    "site:ssense.com editorial fashion culture",
+    "Suzy Menkes fashion review collection",
+    "fashion week street style analysis what it means",
+  ],
+  fabric_construction: [
+    "luxury fabric guide fashion linen silk wool cashmere quality",
+    "how to identify quality clothing fabric construction guide",
+    "why expensive clothes fit better construction tailoring guide",
+    "fabric guide fashion silk linen wool cashmere cotton quality feel",
+    "Italian tailoring vs fast fashion construction difference",
+  ],
+  colour_theory: [
+    "colour theory fashion advanced seasonal palette analysis",
+    "how colours work with skin tone advanced colour theory fashion",
+    "colour psychology fashion what colours communicate style",
+    "tonal dressing colour blocking advanced fashion guide",
+    "French approach to colour fashion Parisian palette guide",
+  ],
+  proportion_silhouette: [
+    "fashion proportion rules advanced silhouette styling guide",
+    "golden ratio fashion styling proportion theory",
+    "how to dress your body advanced proportion guide fashion",
+    "silhouette history fashion why shapes return cultural meaning",
+    "tailoring fit guide fashion how clothes should fit premium",
+  ],
+  fashion_culture_taste: [
+    "how to develop fashion taste advanced style guide",
+    "fashion insider style secrets what stylists know",
+    "how to look expensive fashion guide quality over quantity",
+    "Parisian style guide real French fashion approach",
+    "Japanese fashion aesthetic guide minimal quality approach",
+    "how fashion reflects personality psychology style identity",
+    "mixing high and low fashion guide investment pieces",
+  ],
+  indian_premium_fashion: [
+    "site:vogue.in designer profile Indian fashion aesthetic",
+    "Indian designer philosophy Anavila Raw Mango Bodice aesthetic",
+    "Indian fabric guide Chanderi Banarasi Kanjivaram Khadi when to wear quality",
+    "Indian fashion week analysis FDCI Lakme designer collection",
+    "Indian colour theory skin tone warm dusky fair what to wear",
+    "premium Indian fashion guide investment pieces designers",
+    "Indian occasion dressing advanced guide wedding festive corporate",
+    "site:perniaspopupshop.com designer story Indian fashion",
+  ],
+  menswear_premium: [
+    "GQ style guide advanced menswear",
+    "site:gq.com style guide how to dress men premium",
+    "Italian menswear philosophy sprezzatura style guide",
+    "how to dress well men advanced guide investment wardrobe",
+    "menswear fit guide premium tailoring advanced",
+    "Japanese menswear aesthetic guide minimal quality",
+  ],
+};
+
+const premiumArticleQueries: Array<{ query: string; results?: number; categoryTag?: PremiumCategory }> = Object.entries(premiumQueryGroups).flatMap(
+  ([categoryTag, queries]) => queries.map((query) => ({ query, categoryTag: categoryTag as PremiumCategory })),
+);
+
+const legacyArticleQueries: Array<{ query: string; results?: number; categoryTag?: PremiumCategory }> = [
   { query: "how to dress for your body type complete guide" },
   { query: "men style guide how to dress well" },
   { query: "capsule wardrobe guide women" },
@@ -123,6 +217,11 @@ const articleQueries: Array<{ query: string; results?: number }> = [
   { query: "watch styling guide men" },
 ];
 
+const articleQueries: Array<{ query: string; results?: number; categoryTag?: PremiumCategory }> = [
+  ...premiumArticleQueries,
+  ...legacyArticleQueries,
+];
+
 const redditFallbackQueries = [
   { query: "site:reddit.com/r/femalefashionadvice style guide", results: 20, gender: "female" as const },
   { query: "site:reddit.com/r/malefashionadvice style guide", results: 20, gender: "male" as const },
@@ -130,15 +229,24 @@ const redditFallbackQueries = [
 ];
 
 const embeddingModels = [
-  "models/text-embedding-004",
-  "models/embedding-001",
-  "models/gemini-embedding-exp-03-07",
+  "gemini-embedding-001",
 ];
+
+const STYLE_KNOWLEDGE_EMBEDDING_DIMENSIONS = 768;
 
 let workingEmbeddingModel: string | null = null;
 let embeddingUnavailable = false;
 
-function detectCategory(title: string): KnowledgeItem["category"] {
+function broadCategoryForPremiumTag(categoryTag?: PremiumCategory): KnowledgeCategory {
+  if (categoryTag === "colour_theory") return "colour";
+  if (categoryTag === "proportion_silhouette") return "body_type";
+  if (categoryTag === "menswear_premium") return "mens";
+  if (categoryTag === "indian_premium_fashion") return "occasion";
+  return "general";
+}
+
+function detectCategory(title: string, categoryTag?: PremiumCategory): KnowledgeItem["category"] {
+  if (categoryTag) return broadCategoryForPremiumTag(categoryTag);
   const value = title.toLowerCase();
   if (value.includes("body type") || value.includes("body shape")) return "body_type";
   if (value.includes("colour") || value.includes("color")) return "colour";
@@ -169,6 +277,35 @@ function normalizeText(text: string) {
     .trim();
 }
 
+function normalizeTitleKey(title: string) {
+  return normalizeText(title)
+    .toLowerCase()
+    .replace(/&[#a-z0-9]+;/g, " ")
+    .replace(/['']/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isBlockedOrPaywalledText(text: string) {
+  const value = text.toLowerCase();
+  return [
+    "subscribe to continue",
+    "subscription required",
+    "sign in to continue",
+    "log in to continue",
+    "login to continue",
+    "create an account to continue",
+    "enable javascript",
+    "access denied",
+    "request blocked",
+    "temporarily blocked",
+    "forbidden",
+    "paywall",
+    "403 forbidden",
+  ].some((pattern) => value.includes(pattern));
+}
+
 function domainFromUrl(url: string) {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -177,11 +314,15 @@ function domainFromUrl(url: string) {
   }
 }
 
-function uniqueByUrl(items: KnowledgeItem[]) {
-  const seen = new Set<string>();
+function uniqueByUrlAndTitle(items: KnowledgeItem[]) {
+  const seenUrls = new Set<string>();
+  const seenTitles = new Set<string>();
   return items.filter((item) => {
-    if (!item.source_url || seen.has(item.source_url)) return false;
-    seen.add(item.source_url);
+    const titleKey = normalizeTitleKey(item.title);
+    if (!item.source_url || seenUrls.has(item.source_url)) return false;
+    if (!titleKey || seenTitles.has(titleKey)) return false;
+    seenUrls.add(item.source_url);
+    seenTitles.add(titleKey);
     return item.content.trim().length > 80;
   });
 }
@@ -253,6 +394,7 @@ async function scrapeRedditViaSerper() {
           title,
           content,
           category: detectCategory(title),
+          category_tags: [],
           gender: detectGender(title, fallbackQuery.gender),
         });
       }
@@ -306,6 +448,7 @@ async function scrapeReddit() {
           title,
           content,
           category: detectCategory(title),
+          category_tags: [],
           gender: detectGender(title, source.gender),
         });
       }
@@ -319,25 +462,39 @@ async function scrapeReddit() {
 
 async function fetchArticleText(url: string) {
   try {
-    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-    const response = await fetchWithTimeout(proxyUrl, { headers: { "User-Agent": "FashlockStyleKnowledge/1.0" } }, ARTICLE_TIMEOUT_MS);
+    const response = await fetchWithTimeout(
+      url,
+      {
+        headers: {
+          "User-Agent": "FashlockStyleKnowledge/1.0",
+          Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+        },
+      },
+      ARTICLE_TIMEOUT_MS,
+    );
+    if ([401, 402, 403, 407, 429, 451].includes(response.status)) return "";
     if (!response.ok) return "";
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType && !/text\/html|text\/plain|application\/xhtml\+xml/i.test(contentType)) return "";
     const html = await response.text();
-    return normalizeText(html).slice(0, 18000);
+    const text = normalizeText(html);
+    if (isBlockedOrPaywalledText(text)) return "";
+    return text.slice(0, FULL_ARTICLE_TEXT_LIMIT);
   } catch (error) {
     console.error("Article fetch error:", error);
     return "";
   }
 }
 
-async function scrapeArticleQuery(queryConfig: { query: string; results?: number }, fetchFullText = true) {
+async function scrapeArticleQuery(queryConfig: { query: string; results?: number; categoryTag?: PremiumCategory }, fetchFullText = true, maxResults?: number) {
   const key = process.env.SERPER_API_KEY;
   if (!key) {
     console.error("SERPER_API_KEY missing; skipping article scrape");
     return [];
   }
 
-  const { query, results: resultLimit = ARTICLE_RESULTS_PER_QUERY } = queryConfig;
+  const { query, results = ARTICLE_RESULTS_PER_QUERY, categoryTag } = queryConfig;
+  const resultLimit = Math.min(results, maxResults ?? results);
 
   try {
     const response = await fetchWithTimeout("https://google.serper.dev/search", {
@@ -364,15 +521,17 @@ async function scrapeArticleQuery(queryConfig: { query: string; results?: number
         const fullText = fetchFullText ? await fetchArticleText(url) : "";
         const snippetText = normalizeText([result.title, result.snippet].filter(Boolean).join("\n\n"));
         const content = fullText || snippetText;
-        if (!content) return null;
+        if (!content || isBlockedOrPaywalledText(content)) return null;
         const title = result.title || query;
+        if (isBlockedOrPaywalledText(title)) return null;
 
         return {
           source: domainFromUrl(url),
           source_url: url,
           title,
           content,
-          category: detectCategory(`${query} ${title}`),
+          category: detectCategory(`${query} ${title}`, categoryTag),
+          category_tags: categoryTag ? [categoryTag] : [],
           gender: detectGender(`${query} ${title}`, "both"),
         } satisfies KnowledgeItem;
       }),
@@ -385,18 +544,21 @@ async function scrapeArticleQuery(queryConfig: { query: string; results?: number
   }
 }
 
-async function scrapeArticles(fetchFullText = true) {
+async function scrapeArticles(fetchFullText = true, limit = MAX_ITEMS_PER_RUN, categoryTag?: PremiumCategory) {
   const items: KnowledgeItem[] = [];
-  const batches = Math.ceil(articleQueries.length / QUERY_BATCH_SIZE);
+  const queries = categoryTag ? premiumArticleQueries.filter((queryConfig) => queryConfig.categoryTag === categoryTag) : articleQueries;
+  const batches = Math.ceil(queries.length / QUERY_BATCH_SIZE);
+  const smallRunResultLimit = limit < MAX_ITEMS_PER_RUN ? Math.max(2, Math.min(ARTICLE_RESULTS_PER_QUERY, Math.ceil(limit / QUERY_BATCH_SIZE) + 1)) : undefined;
 
-  for (let index = 0; index < articleQueries.length; index += QUERY_BATCH_SIZE) {
+  for (let index = 0; index < queries.length; index += QUERY_BATCH_SIZE) {
     const batchNumber = Math.floor(index / QUERY_BATCH_SIZE) + 1;
-    const batchQueries = articleQueries.slice(index, index + QUERY_BATCH_SIZE);
-    const batchResults = await Promise.all(batchQueries.map((queryConfig) => scrapeArticleQuery(queryConfig, fetchFullText)));
+    const batchQueries = queries.slice(index, index + QUERY_BATCH_SIZE);
+    const batchResults = await Promise.all(batchQueries.map((queryConfig) => scrapeArticleQuery(queryConfig, fetchFullText, smallRunResultLimit)));
     const batchItems = batchResults.flat();
     items.push(...batchItems);
     console.log(`Search batch ${batchNumber}/${batches} collected ${batchItems.length} candidate items.`);
-    if (index + QUERY_BATCH_SIZE < articleQueries.length) await delay(BATCH_DELAY_MS);
+    if (uniqueByUrlAndTitle(items).length >= limit) break;
+    if (index + QUERY_BATCH_SIZE < queries.length) await delay(BATCH_DELAY_MS);
   }
 
   return items;
@@ -412,33 +574,48 @@ async function embedContent(content: string) {
 
   for (const model of modelsToTry) {
     try {
-      const response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/${model}:embedContent?key=${key}`, {
+      const modelPath = `models/${model}`;
+      const response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/${modelPath}:embedContent`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": key,
+        },
         body: JSON.stringify({
-          model,
           content: {
             parts: [{ text: contentText }],
           },
+          output_dimensionality: STYLE_KNOWLEDGE_EMBEDDING_DIMENSIONS,
+          taskType: "RETRIEVAL_DOCUMENT",
         }),
       });
 
       if (!response.ok) {
         const err = await response.text();
         errors.push(`${model}: ${response.status} ${err}`);
-        console.error("Gemini error:", response.status, err);
+        console.error("Gemini embedding model failed", {
+          model,
+          status: response.status,
+          message: err.slice(0, 300),
+        });
         continue;
       }
 
       const data = await response.json();
-      const values = data.embedding?.values;
+      const values = data.embedding?.values || data.embeddings?.[0]?.values;
+      const dimension = Array.isArray(values) ? values.length : 0;
+      console.log("Gemini embedding model response", {
+        model,
+        status: response.status,
+        dimension,
+      });
       if (!Array.isArray(values) || !values.length) {
         errors.push(`${model}: missing embedding.values`);
         continue;
       }
 
-      if (values.length !== 768) {
-        errors.push(`${model}: returned ${values.length} dimensions, expected 768`);
+      if (values.length !== STYLE_KNOWLEDGE_EMBEDDING_DIMENSIONS) {
+        errors.push(`${model}: returned ${values.length} dimensions, expected ${STYLE_KNOWLEDGE_EMBEDDING_DIMENSIONS}`);
         continue;
       }
 
@@ -455,12 +632,48 @@ async function embedContent(content: string) {
   return null;
 }
 
-async function collectKnowledge(fetchFullText = true) {
-  const [redditDirect, redditFallback, articles] = await Promise.all([scrapeReddit(), scrapeRedditViaSerper(), scrapeArticles(fetchFullText)]);
-  return uniqueByUrl([...redditDirect, ...redditFallback, ...articles]).slice(0, MAX_ITEMS_PER_RUN);
+function requestedLimit(request: Request) {
+  const value = Number(new URL(request.url).searchParams.get("limit") || MAX_ITEMS_PER_RUN);
+  if (!Number.isFinite(value) || value < 1) return MAX_ITEMS_PER_RUN;
+  return Math.min(Math.floor(value), MAX_ITEMS_PER_RUN);
 }
 
-async function runScraper(fetchFullText = true) {
+function requestedPremiumCategory(request: Request) {
+  const value = new URL(request.url).searchParams.get("category");
+  if (!value) return undefined;
+  return Object.prototype.hasOwnProperty.call(premiumQueryGroups, value) ? (value as PremiumCategory) : undefined;
+}
+
+async function collectKnowledge(fetchFullText = true, limit = MAX_ITEMS_PER_RUN, categoryTag?: PremiumCategory) {
+  const articles = uniqueByUrlAndTitle(await scrapeArticles(fetchFullText, limit, categoryTag));
+  if (articles.length >= limit) return articles.slice(0, limit);
+  if (categoryTag) return articles;
+
+  const [redditDirect, redditFallback] = await Promise.all([scrapeReddit(), scrapeRedditViaSerper()]);
+  return uniqueByUrlAndTitle([...articles, ...redditDirect, ...redditFallback]).slice(0, limit);
+}
+
+function isMissingCategoryTagsColumn(error: { message?: string; code?: string }) {
+  return error.code === "PGRST204" || /category_tags/i.test(error.message || "");
+}
+
+async function insertKnowledgeItem(supabase: ReturnType<typeof getSupabaseClient>, item: KnowledgeItem, embedding: number[] | null) {
+  if (!supabase) return { error: { message: "Supabase is not configured" } };
+
+  const payload = {
+    ...item,
+    category_tags: item.category_tags ?? [],
+    embedding,
+  };
+
+  const result = await supabase.from("style_knowledge").insert(payload);
+  if (!result.error || !isMissingCategoryTagsColumn(result.error)) return result;
+
+  const { category_tags: _categoryTags, ...withoutCategoryTags } = payload;
+  return supabase.from("style_knowledge").insert(withoutCategoryTags);
+}
+
+async function runScraper(fetchFullText = true, limit = MAX_ITEMS_PER_RUN, categoryTag?: PremiumCategory) {
   const supabase = getSupabaseClient();
   if (!supabase) {
     return { ok: false, error: "Supabase is not configured", collected: 0, stored: 0 };
@@ -477,7 +690,7 @@ async function runScraper(fetchFullText = true) {
     };
   }
 
-  const collected = await collectKnowledge(fetchFullText);
+  const collected = await collectKnowledge(fetchFullText, limit, categoryTag);
   let stored = 0;
   let embedded = 0;
   let skipped = 0;
@@ -488,17 +701,21 @@ async function runScraper(fetchFullText = true) {
     let batchEmbedded = 0;
 
     for (const item of batch) {
-      const { data: existing, error: existingError } = await supabase
+      const { data: existingByUrl, error: existingUrlError } = await supabase
         .from("style_knowledge")
         .select("id")
         .eq("source_url", item.source_url)
         .maybeSingle();
 
-      if (existingError) {
-        console.error("style_knowledge duplicate check error:", existingError.message);
+      const { data: existingByTitle, error: existingTitleError } = existingByUrl
+        ? { data: null, error: null }
+        : await supabase.from("style_knowledge").select("id").eq("title", item.title).maybeSingle();
+
+      if (existingUrlError || existingTitleError) {
+        console.error("style_knowledge duplicate check error:", existingUrlError?.message || existingTitleError?.message);
       }
 
-      if (existing) {
+      if (existingByUrl || existingByTitle) {
         skipped += 1;
         continue;
       }
@@ -509,12 +726,7 @@ async function runScraper(fetchFullText = true) {
         batchEmbedded += 1;
       }
 
-      const { error } = await supabase.from("style_knowledge").insert(
-      {
-        ...item,
-        embedding,
-      },
-    );
+      const { error } = await insertKnowledgeItem(supabase, item, embedding);
 
       if (error) {
         console.error("style_knowledge insert error:", error.message);
@@ -529,7 +741,7 @@ async function runScraper(fetchFullText = true) {
     if (index + 10 < collected.length) await delay(BATCH_DELAY_MS);
   }
 
-  const { count } = await supabase.from("style_knowledge").select("*", { count: "exact", head: true });
+  const { count } = await supabase.from("style_knowledge").select("id", { count: "exact", head: true });
 
   console.log(`Style knowledge scrape collected ${collected.length} articles/posts and stored ${stored}. Embedded ${embedded}. Skipped ${skipped}. Total rows ${count ?? "unknown"}.`);
   return { ok: true, collected: collected.length, stored, embedded, skipped, total: count ?? null };
@@ -537,16 +749,18 @@ async function runScraper(fetchFullText = true) {
 
 export async function GET(request: Request) {
   if (process.env.STYLE_SCRAPER_ENABLED !== "true") return scraperDisabledResponse();
+  if (!isAuthorizedScraperRequest(request)) return unauthorizedResponse();
 
   const url = new URL(request.url);
-  const result = await runScraper(url.searchParams.get("full") !== "0");
+  const result = await runScraper(url.searchParams.get("full") !== "0", requestedLimit(request), requestedPremiumCategory(request));
   return NextResponse.json(result, { status: result.ok ? 200 : 500 });
 }
 
 export async function POST(request: Request) {
   if (process.env.STYLE_SCRAPER_ENABLED !== "true") return scraperDisabledResponse();
+  if (!isAuthorizedScraperRequest(request)) return unauthorizedResponse();
 
   const url = new URL(request.url);
-  const result = await runScraper(url.searchParams.get("full") !== "0");
+  const result = await runScraper(url.searchParams.get("full") !== "0", requestedLimit(request), requestedPremiumCategory(request));
   return NextResponse.json(result, { status: result.ok ? 200 : 500 });
 }

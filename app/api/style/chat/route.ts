@@ -1,10 +1,17 @@
 import { NextResponse } from "next/server";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { getSupabaseClient, logSupabaseFallback, supabaseCache, supabaseCacheTtl } from "@/lib/supabase";
 import { getAuthenticatedUserId } from "@/lib/supabase-auth";
+import { LAILA_FASHION_INTELLIGENCE } from "@/lib/laila-fashion-intelligence";
+import { searchLailaStyleKnowledge } from "@/lib/laila-style-knowledge";
+import { classifyStyleChatIntent, isOutfitIntent, isShoppingIntent } from "@/lib/style-chat-intent";
 
 export const dynamic = "force-dynamic";
 
 const GEMINI_MODEL = "gemini-2.5-flash";
+const IMAGEN_MODEL = process.env.STYLE_CHAT_OUTFIT_IMAGE_MODEL || "imagen-4.0-generate-001";
+const MAX_CHAT_OUTFIT_IMAGES = 2;
 const CAMILLE_SYSTEM_PROMPT = `You are Camille — Fashlock's 
 personal stylist. 
 
@@ -99,6 +106,7 @@ type StyleResponse = {
   response: string;
   hasOutfitDirections: boolean;
   outfitDirections: Array<{ occasion: string; direction: string }>;
+  generatedOutfitImages?: Array<{ occasion: string; direction: string; imagePath: string }>;
   trendKeywords: string[];
   shopTerms: string[];
   followUpSuggestions: string[];
@@ -121,6 +129,11 @@ type StyleProfile = {
   avoids?: string[] | null;
   favourite_pieces?: string | null;
   onboarding_complete?: boolean | null;
+};
+
+type StylePieceResponse = {
+  piece_description: string;
+  outfits: Array<{ occasion: string; outfit: string; tip: string }>;
 };
 
 type VibeAnalysis = {
@@ -191,64 +204,241 @@ function safeArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item) => typeof item === "string").slice(0, 6) : [];
 }
 
-function isOutfitRequest(message: string) {
-  const lower = message.toLowerCase();
-  return [
-    "outfit",
-    "what to wear",
-    "wear",
-    "dress for",
-    "style ideas",
-    "look",
-    "looks",
-    "clothes",
-    "wedding",
-    "date",
-    "work",
-    "office",
-    "gym",
-    "party",
-  ].some((term) => lower.includes(term));
+function sanitizeStylePieceResponse(value: any): StylePieceResponse {
+  const outfits = Array.isArray(value?.outfits)
+    ? value.outfits
+        .filter((item: any) => item?.occasion && item?.outfit && item?.tip)
+        .slice(0, 3)
+        .map((item: any) => ({
+          occasion: String(item.occasion).slice(0, 48),
+          outfit: String(item.outfit).slice(0, 260),
+          tip: String(item.tip).slice(0, 180),
+        }))
+    : [];
+
+  return {
+    piece_description: String(value?.piece_description || "this piece").slice(0, 180),
+    outfits,
+  };
 }
 
-async function searchKnowledge(message: string, gender: Gender) {
-  const supabase = getSupabaseClient();
-  if (!supabase) return [];
+async function styleUploadedPiece({ imageBase64, mimeType }: { imageBase64: string; mimeType: string }): Promise<StylePieceResponse | null> {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return null;
 
-  return supabaseCache(`style-knowledge:${gender}:${message.toLowerCase().slice(0, 160)}`, supabaseCacheTtl("style_knowledge"), async () => {
-    const { data: rpcData, error: rpcError } = await supabase.rpc("search_style_knowledge", {
-      query_text: message,
-      gender_filter: gender,
-      limit_count: 5,
+  const prompt = `The user has uploaded a photo of a clothing item they own. Analyse the piece — its colour, fabric, silhouette, and formality level. Then suggest exactly 3 complete outfits that feature this piece as the hero item.
+
+For each outfit provide:
+- Occasion (e.g. Casual Day Out, Work Meeting, Evening Out)
+- Complete outfit description (the uploaded piece + 3-4 other items with specific colours and styles)
+- One styling tip specific to this piece
+
+Format as JSON:
+{
+  "piece_description": "...",
+  "outfits": [
+    {
+      "occasion": "...",
+      "outfit": "...",
+      "tip": "..."
+    }
+  ]
+}`;
+
+  try {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                inline_data: {
+                  mime_type: mimeType,
+                  data: imageBase64,
+                },
+              },
+              { text: prompt },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.62,
+          responseMimeType: "application/json",
+        },
+      }),
     });
 
-    if (!rpcError && rpcData?.length) return rpcData;
-    if (rpcError) console.error("style knowledge search RPC failed:", rpcError.message);
-
-    const words = message
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .filter((word) => word.length > 3)
-      .slice(0, 5);
-
-    if (!words.length) return [];
-
-    const orFilter = words.flatMap((word) => [`title.ilike.%${word}%`, `content.ilike.%${word}%`]).join(",");
-    const { data, error } = await supabase
-      .from("style_knowledge")
-      .select("id,title,content,source,category,gender")
-      .or(orFilter)
-      .in("gender", gender === "female" ? ["female", "both"] : ["male", "both"])
-      .limit(5);
-
-    if (error) {
-      logSupabaseFallback(error);
-      return [];
+    if (!response.ok) {
+      console.error("Style piece Gemini error:", response.status, await response.text());
+      return null;
     }
 
-    return data || [];
-  });
+    const data = await response.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const parsed = JSON.parse(cleanJson(text));
+    const result = sanitizeStylePieceResponse(parsed);
+    return result.outfits.length === 3 ? result : null;
+  } catch (error) {
+    console.error("Style piece analysis error:", error);
+    return null;
+  }
+}
+
+function extractLiteralOutfitDirections(text: string) {
+  if (!/\bwhat\s+to\s+wear\b/i.test(text)) return [];
+
+  const section = text.split(/\bwhat\s+to\s+wear\b/i)[1] || "";
+  const matches = Array.from(
+    section.matchAll(
+      /\b(DAY WEAR|EVENING WEAR|SMART CASUAL|CASUAL|POLISHED|DAY|EVENING|WORK|OFFICE|WEEKEND|EASY|FORMAL|OCCASION)\b\s*:?\s*([\s\S]*?)(?=\n\s*(?:DAY WEAR|EVENING WEAR|SMART CASUAL|CASUAL|POLISHED|DAY|EVENING|WORK|OFFICE|WEEKEND|EASY|FORMAL|OCCASION)\b\s*:?|\n\s*[A-Z][A-Z\s]{3,}:|$)/gi,
+    ),
+  );
+
+  return matches
+    .map((match) => ({
+      occasion: String(match[1] || "").toUpperCase().slice(0, 24),
+      direction: String(match[2] || "")
+        .replace(/^[-–—:\s]+/, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 220),
+    }))
+    .filter((item) => item.occasion && item.direction);
+}
+
+function getOutfitImageTargets(response: StyleResponse) {
+  const structured = response.hasOutfitDirections ? response.outfitDirections || [] : [];
+  const literal = extractLiteralOutfitDirections(response.response);
+  const seen = new Set<string>();
+
+  return [...structured, ...literal]
+    .map((item) => ({
+      occasion: String(item.occasion || "LOOK").toUpperCase().slice(0, 24),
+      direction: String(item.direction || "").replace(/\s+/g, " ").trim().slice(0, 220),
+    }))
+    .filter((item) => {
+      const key = `${item.occasion}:${item.direction.toLowerCase()}`;
+      if (!item.direction || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, MAX_CHAT_OUTFIT_IMAGES);
+}
+
+async function generateChatOutfitImages(response: StyleResponse) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return [];
+
+  const targets = getOutfitImageTargets(response);
+  if (!targets.length) return [];
+
+  const outputDir = path.join(process.cwd(), "public", "chat-outfits");
+  const generated: Array<{ occasion: string; direction: string; imagePath: string }> = [];
+  await mkdir(outputDir, { recursive: true });
+
+  for (const [index, target] of targets.entries()) {
+    try {
+      const timestamp = Date.now();
+      const fileName = `${timestamp}-${index}.jpg`;
+      const prompt = [
+        "Editorial fashion photograph. Full body shot from head to toe. White or soft ivory background.",
+        target.direction,
+        "Show the complete outfit including top, bottom, and shoes. Do not crop. Clean, minimal, magazine editorial quality. Model facing forward.",
+      ].join(" ");
+
+      const imageResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${IMAGEN_MODEL}:predict?key=${key}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          instances: [{ prompt }],
+          parameters: {
+            sampleCount: 1,
+            aspectRatio: "9:16",
+          },
+        }),
+      });
+
+      if (!imageResponse.ok) {
+        console.error("Style chat outfit image failed:", IMAGEN_MODEL, imageResponse.status);
+        continue;
+      }
+
+      const payload = await imageResponse.json();
+      const imageBase64 =
+        payload?.predictions?.[0]?.bytesBase64Encoded ||
+        payload?.predictions?.[0]?.bytesBase64 ||
+        payload?.predictions?.[0]?.image?.bytesBase64Encoded;
+
+      if (!imageBase64) {
+        console.error("Style chat outfit image missing bytes:", IMAGEN_MODEL);
+        continue;
+      }
+
+      await writeFile(path.join(outputDir, fileName), Buffer.from(imageBase64, "base64"));
+      generated.push({ ...target, imagePath: `/chat-outfits/${fileName}` });
+    } catch (error) {
+      console.error("Style chat outfit image skipped:", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return generated;
+}
+
+function hasProfileMemory(profile: StyleProfile | null, vibeAnalysis: VibeAnalysis | null) {
+  return Boolean(
+    vibeAnalysis?.vibe ||
+      vibeAnalysis?.skinTone ||
+      vibeAnalysis?.bodyType ||
+      vibeAnalysis?.stylePersonality ||
+      profile?.vibe ||
+      profile?.skin_tone ||
+      profile?.body_type ||
+      profile?.camilles_take ||
+      profile?.current_outfit_read ||
+      profile?.style_personality?.length ||
+      profile?.colours_that_glow?.length ||
+      profile?.colour_palette?.length,
+  );
+}
+
+function appearanceMemoryResponse(profile: StyleProfile | null, vibeAnalysis: VibeAnalysis | null): StyleResponse {
+  const vibe = vibeAnalysis?.vibe || profile?.vibe || profile?.style_personality?.[0] || "clean, considered, and quietly expressive";
+  const skinTone = vibeAnalysis?.skinTone || profile?.skin_tone || "your colouring";
+  const bodyType = vibeAnalysis?.bodyType || profile?.body_type || "your proportions";
+  const colours = profile?.colours_that_glow?.length
+    ? profile.colours_that_glow.slice(0, 3).join(", ")
+    : profile?.colour_palette?.length
+      ? profile.colour_palette.slice(0, 3).join(", ")
+      : "soft neutrals, richer earth tones, and colours with depth";
+  const avoid = profile?.colours_to_avoid?.length ? `Go easy on ${profile.colours_to_avoid.slice(0, 2).join(" and ")} near your face.` : "";
+  const personality = vibeAnalysis?.stylePersonality || profile?.style_personality?.slice(0, 2).join(" and ") || "polished ease";
+  const outfitRead = profile?.current_outfit_read || vibeAnalysis?.currentlyWearing;
+
+  const read = outfitRead ? `From the photo memory, ${outfitRead.toLowerCase()}. ` : "";
+
+  return {
+    response: `${read}Your vibe reads ${vibe}: ${personality}, but better when the lines stay intentional. With ${skinTone}, ${colours} will do more for you than loud contrast, and ${bodyType} needs clean proportion rather than extra visual noise. ${avoid}`.trim(),
+    hasOutfitDirections: false,
+    outfitDirections: [],
+    trendKeywords: [vibe, personality, colours].filter(Boolean).slice(0, 3),
+    shopTerms: [],
+    followUpSuggestions: ["Tell me what features stand out", "What colours should I avoid"],
+  };
+}
+
+function photoNeededResponse(hasUploadedImage = false): StyleResponse {
+  return {
+    response: hasUploadedImage
+      ? "I have the photo, but I couldn't read it properly this time. Try uploading it again so I can talk about your vibe, colours, proportions, and what stands out without guessing."
+      : "I can do this properly if you upload a photo — otherwise I’d only be guessing.",
+    hasOutfitDirections: false,
+    outfitDirections: [],
+    trendKeywords: [],
+    shopTerms: [],
+    followUpSuggestions: ["Upload a photo", "Use my saved style profile"],
+  };
 }
 
 async function getLatestTrendContext() {
@@ -478,6 +668,15 @@ async function callGemini({
   }
 }
 
+function sanitizeAppearanceResponse(response: StyleResponse): StyleResponse {
+  return {
+    ...response,
+    hasOutfitDirections: false,
+    outfitDirections: [],
+    shopTerms: [],
+  };
+}
+
 async function logMessage(userId: string | null, sessionId: string | null, message: string) {
   const supabase = getSupabaseClient();
   const profileKey = userId || sessionId;
@@ -498,6 +697,7 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const message = String(body.message || "").trim();
+    const mode = typeof body.mode === "string" ? body.mode : "";
     const gender = body.gender === "male" ? "male" : "female";
     const sessionId = typeof body.sessionId === "string" ? body.sessionId : null;
     const userId = await getAuthenticatedUserId();
@@ -511,14 +711,73 @@ export async function POST(request: Request) {
     const vibeAnalysis = body.vibeAnalysis && typeof body.vibeAnalysis === "object" ? (body.vibeAnalysis as VibeAnalysis) : null;
     const history = Array.isArray(body.conversationHistory) ? (body.conversationHistory as ChatMessage[]).slice(-12) : [];
 
+    if (mode === "style-piece") {
+      if (!imageBase64 || !mimeType) {
+        return NextResponse.json({ error: "Missing image" }, { status: 400 });
+      }
+
+      const pieceResult = await styleUploadedPiece({ imageBase64, mimeType });
+      if (!pieceResult) {
+        return NextResponse.json({ error: "Failed to style piece" }, { status: 500 });
+      }
+
+      return NextResponse.json(pieceResult);
+    }
+
     if (!message) return NextResponse.json({ error: "Missing message" }, { status: 400 });
 
-    const [knowledge, trendContext, profile] = await Promise.all([
-      searchKnowledge(message, gender),
+    const intent = classifyStyleChatIntent(message);
+
+    if (intent === "appearance") {
+      const profile = await getStyleProfile(sessionId);
+      await logMessage(userId, sessionId, message);
+
+      if (hasProfileMemory(profile, vibeAnalysis)) {
+        return NextResponse.json(appearanceMemoryResponse(profile, vibeAnalysis));
+      }
+
+      if (imageBase64 && mimeType) {
+        const prompt = `${CAMILLE_SYSTEM_PROMPT}
+
+The user is asking how they look, what vibe they give off, which features stand out, or what aesthetic/colours suit them.
+Use the uploaded image only for appearance, vibe, colours, proportions, and style personality.
+Do not suggest products.
+Do not create outfit cards.
+Do not return shopTerms.
+
+USER'S CURRENT QUESTION:
+${message}
+
+Respond in JSON only:
+{
+  "response": "conversational reply, max 3 sentences, warm and direct",
+  "hasOutfitDirections": false,
+  "outfitDirections": [],
+  "trendKeywords": ["vibe, colour, or style words only"],
+  "shopTerms": [],
+  "followUpSuggestions": ["natural follow-up question 1", "natural follow-up question 2"]
+}`;
+
+        const geminiResponse = await callGemini({
+          prompt,
+          forceOutfitDirections: false,
+          imageBase64,
+          mimeType,
+        });
+
+        if (geminiResponse) return NextResponse.json(sanitizeAppearanceResponse(geminiResponse));
+      }
+
+      return NextResponse.json(photoNeededResponse(Boolean(imageBase64 && mimeType)));
+    }
+
+    const [knowledgeResult, trendContext, profile] = await Promise.all([
+      searchLailaStyleKnowledge(message, gender, 8, "style-chat"),
       getLatestTrendContext(),
       getStyleProfile(sessionId),
     ]);
-    const forceOutfitDirections = isOutfitRequest(message);
+    const knowledge = knowledgeResult.chunks;
+    const forceOutfitDirections = isOutfitIntent(message) || isShoppingIntent(message);
 
     const knowledgeText = knowledge
       .map((item: any, index: number) => `${index + 1}. ${item.title}\nSource: ${item.source}\nCategory: ${item.category}\n${String(item.content || "").slice(0, 900)}`)
@@ -592,6 +851,7 @@ YOUR RULES:
   Accessible premium: Indya (for younger), Libas (good basics), Kalki (lehengas), Pernia's Pop-Up Shop (multi-designer).
   Men ethnic: Manyavar (accessible), Sahil Beggarani (premium), Raghavendra Rathore (investment).
   Avoid suggesting: anything from Meesho, Snapdeal, or unbranded Amazon listings — these look cheap.
+${LAILA_FASHION_INTELLIGENCE}
 - WHAT LAILA NEVER RECOMMENDS:
   Fast fashion for investment pieces.
   Anything that looks like it came from a wholesale market.
@@ -626,6 +886,10 @@ Respond in JSON only:
     }
 
     const response = geminiResponse || fallbackResponse(message, gender, trendContext.trending);
+    const generatedOutfitImages = await generateChatOutfitImages(response);
+    if (generatedOutfitImages.length) {
+      response.generatedOutfitImages = generatedOutfitImages;
+    }
     return NextResponse.json(response);
   } catch (error) {
     console.error("Style chat route error:", error);

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { unstable_cache } from "next/cache";
 
 type SearchResult = {
   title?: string;
@@ -15,7 +16,8 @@ type ArticleEngineResponse = {
 };
 
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+
+const ARTICLE_ENGINE_REVALIDATE_SECONDS = 60 * 60 * 12;
 
 function stripHtml(html: string) {
   return html
@@ -236,6 +238,51 @@ Return only the article body text. Nothing else.`;
   throw new Error("Gemini article generation failed");
 }
 
+async function generateArticleEngineResponse(topic: string): Promise<ArticleEngineResponse> {
+  const [results, imageUrl] = await Promise.all([searchWeb(topic), fetchHeroImage(topic)]);
+  const urls = results.map((result) => result.link!).filter(Boolean);
+  const uniqueSources = new Map<string, string>();
+  for (const result of results) {
+    const url = result.link!;
+    const domain = result.displayLink ?? domainFromUrl(url);
+    if (!uniqueSources.has(domain)) {
+      uniqueSources.set(domain, url);
+    }
+  }
+  const sources = Array.from(uniqueSources.keys());
+  const sourceUrls = Array.from(uniqueSources.values());
+  const contentPieces = await Promise.all(urls.map(fetchPageText));
+
+  const combinedResearch = contentPieces
+    .filter((content) => content.length > 100)
+    .join("\n\n---\n\n")
+    .slice(0, 8000);
+
+  const researchFallback = results
+    .map((result) => [result.title, result.displayLink, result.snippet].filter(Boolean).join(" — "))
+    .join("\n\n---\n\n");
+
+  let articleText = "";
+  try {
+    articleText = await writeArticle(topic, combinedResearch || researchFallback);
+  } catch {
+    articleText = fallbackArticleFromResearch(topic, results, contentPieces);
+  }
+
+  return {
+    text: articleText,
+    sources,
+    sourceUrls,
+    imageUrl,
+  };
+}
+
+const cachedGenerateArticleEngineResponse = unstable_cache(
+  generateArticleEngineResponse,
+  ["article-engine-response-v1"],
+  { revalidate: ARTICLE_ENGINE_REVALIDATE_SECONDS },
+);
+
 export async function GET(request: Request) {
   const topic = new URL(request.url).searchParams.get("topic")?.trim();
 
@@ -244,44 +291,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const [results, imageUrl] = await Promise.all([searchWeb(topic), fetchHeroImage(topic)]);
-    const urls = results.map((result) => result.link!).filter(Boolean);
-    const uniqueSources = new Map<string, string>();
-    for (const result of results) {
-      const url = result.link!;
-      const domain = result.displayLink ?? domainFromUrl(url);
-      if (!uniqueSources.has(domain)) {
-        uniqueSources.set(domain, url);
-      }
-    }
-    const sources = Array.from(uniqueSources.keys());
-    const sourceUrls = Array.from(uniqueSources.values());
-    const contentPieces = await Promise.all(urls.map(fetchPageText));
-
-    const combinedResearch = contentPieces
-      .filter((content) => content.length > 100)
-      .join("\n\n---\n\n")
-      .slice(0, 8000);
-
-    const researchFallback = results
-      .map((result) => [result.title, result.displayLink, result.snippet].filter(Boolean).join(" — "))
-      .join("\n\n---\n\n");
-
-    let articleText = "";
-    try {
-      articleText = await writeArticle(topic, combinedResearch || researchFallback);
-    } catch {
-      articleText = fallbackArticleFromResearch(topic, results, contentPieces);
-    }
-
-    const body: ArticleEngineResponse = {
-      text: articleText,
-      sources,
-      sourceUrls,
-      imageUrl,
-    };
-
-    return NextResponse.json(body);
+    return NextResponse.json(await cachedGenerateArticleEngineResponse(topic));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Article generation failed";
     return NextResponse.json({ error: message }, { status: 500 });

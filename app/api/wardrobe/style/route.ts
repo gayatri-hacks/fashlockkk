@@ -1,97 +1,95 @@
 import { NextResponse } from "next/server";
+import { getAuthenticatedUserId } from "@/lib/supabase-auth";
 
-type SelectedItem = {
-  name?: string;
-  color?: string;
+type WardrobePiece = {
+  name?: string | null;
+  color?: string | null;
+  category?: string | null;
 };
 
-const OCCASIONS = [
-  "Casual day out",
-  "Girls' lunch",
-  "Office or work",
-  "Evening out",
-  "Glam party night",
-  "Lazy Sunday",
-];
+type CompleteLook = {
+  name: string;
+  uses: string[];
+  missing: string[];
+  why: string;
+};
 
 function cleanJson(text: string) {
   return text.replace(/```json|```/g, "").trim();
 }
 
-function pieceNames(selectedItems: SelectedItem[]) {
-  return selectedItems.map((item) => item.name || "your piece").join(", ");
+function pieceLabel(piece: WardrobePiece) {
+  const color = piece.color?.trim();
+  const name = piece.name?.trim();
+  const category = piece.category?.trim();
+
+  if (name && color && !name.toLowerCase().includes(color.toLowerCase())) return `${color} ${name}`;
+  return name || category || "wardrobe piece";
 }
 
-function fallbackDirections(selectedItems: SelectedItem[]) {
-  const pieces = pieceNames(selectedItems);
+function sanitizeOutfits(value: unknown): CompleteLook[] {
+  const raw = Array.isArray((value as { outfits?: unknown[] })?.outfits) ? (value as { outfits: unknown[] }).outfits : [];
+
+  return raw.slice(0, 3).map((item, index) => {
+    const outfit = item as Partial<CompleteLook>;
+    return {
+      name: String(outfit.name || `Outfit ${index + 1}`).slice(0, 60),
+      uses: Array.isArray(outfit.uses) ? outfit.uses.slice(0, 4).map((entry) => String(entry).slice(0, 60)) : [],
+      missing: Array.isArray(outfit.missing) ? outfit.missing.slice(0, 2).map((entry) => String(entry).slice(0, 80)) : [],
+      why: String(outfit.why || "This works because the proportions feel intentional.").slice(0, 180),
+    };
+  });
+}
+
+function fallbackOutfits(labels: string[]): CompleteLook[] {
+  const first = labels[0] || "your hero piece";
+  const second = labels[1] || "your easiest basic";
+  const third = labels[2] || "your third piece";
 
   return [
     {
-      occasion: OCCASIONS[0],
-      vibe: ["easy", "clean", "confident"],
-      howToWear: `Use ${pieces} in the simplest line: keep the lightest piece closest to the face, roll sleeves or cuffs once, and leave one layer open so the outfit has movement.`,
-      addThese: ["white leather sneakers", "small crossbody bag", "fine gold hoops"],
-      avoid: "Avoid adding too many loud colors; let the pieces look intentional.",
-      editorialLine: "The look says she got ready in ten minutes and still understood the assignment.",
+      name: "Clean Day Uniform",
+      uses: [first, second].filter(Boolean),
+      missing: ["white leather sneakers", "structured everyday tote"],
+      why: "The clean accessories make your existing pieces feel deliberate instead of casual.",
     },
     {
-      occasion: OCCASIONS[1],
-      vibe: ["pretty", "polished", "warm"],
-      howToWear: `Soften ${pieces} with a neat tuck, a visible waist, and one romantic detail like jewellery, gloss, or a softer bag.`,
-      addThese: ["ballet flats", "structured mini bag", "pearl studs"],
-      avoid: "Avoid oversized everything; give the outfit one shaped moment.",
-      editorialLine: "It is relaxed, but it still knows there will be photos.",
+      name: "Soft Polished Evening",
+      uses: [first, third].filter(Boolean),
+      missing: ["low block heels in black or nude", "small gold earrings"],
+      why: "A little shine and height turns familiar pieces into a proper evening look.",
     },
     {
-      occasion: OCCASIONS[2],
-      vibe: ["sharp", "quiet", "capable"],
-      howToWear: `Make ${pieces} feel more deliberate by buttoning or layering cleanly, keeping hems tidy, and choosing one tailored proportion.`,
-      addThese: ["loafers", "sleek tote", "thin belt"],
-      avoid: "Avoid distressed details or messy styling if the setting is formal.",
-      editorialLine: "This is competence without costume.",
-    },
-    {
-      occasion: OCCASIONS[3],
-      vibe: ["sleek", "city", "edited"],
-      howToWear: `Take ${pieces} into evening by sharpening the contrast: tuck cleaner, expose a little wrist or neckline, and keep the silhouette long.`,
-      addThese: ["heeled boots", "black shoulder bag", "smoky liner"],
-      avoid: "Avoid casual sneakers here unless the whole look is intentionally street.",
-      editorialLine: "A city-night version of the same pieces, calmer and more magnetic.",
-    },
-    {
-      occasion: OCCASIONS[4],
-      vibe: ["glossy", "bold", "expensive"],
-      howToWear: `Dress up ${pieces} with shine and height: make one item the base, layer the rest with confidence, and add a polished accessory near the face.`,
-      addThese: ["strappy heels", "metallic clutch", "statement earrings"],
-      avoid: "Avoid flat, daytime styling; the party version needs light, shine, or height.",
-      editorialLine: "The basic pieces stop being basic when the styling gets cinematic.",
-    },
-    {
-      occasion: OCCASIONS[5],
-      vibe: ["soft", "undone", "comfortable"],
-      howToWear: `Wear ${pieces} with the least effort: loosen the tuck, keep layers open, and choose comfort pieces that still look considered.`,
-      addThese: ["soft slides", "canvas tote", "clean ribbed socks"],
-      avoid: "Avoid over-accessorising; Sunday should breathe.",
-      editorialLine: "The outfit is quiet, but not careless.",
+      name: "Easy Work Edit",
+      uses: [second, third].filter(Boolean),
+      missing: ["relaxed tailored blazer", "slim leather belt"],
+      why: "Tailoring gives the outfit structure while still letting your own pieces lead.",
     },
   ];
 }
 
 export async function POST(req: Request) {
   try {
-    const key = process.env.GEMINI_API_KEY;
-    const body = (await req.json()) as { selectedItems?: SelectedItem[] };
-    const selectedItems = body.selectedItems ?? [];
+    const userId = await getAuthenticatedUserId();
 
-    if (selectedItems.length < 1 || selectedItems.length > 5) {
-      return NextResponse.json({ success: false, error: "Select 1 to 5 pieces" }, { status: 400 });
+    if (!userId) {
+      return NextResponse.json({ success: false, error: "Sign in to complete your wardrobe" }, { status: 401 });
+    }
+
+    const key = process.env.GEMINI_API_KEY;
+    const body = (await req.json()) as { items?: WardrobePiece[]; labels?: string[] };
+    const labels = (body.labels?.length ? body.labels : body.items?.map(pieceLabel) ?? [])
+      .map((label) => String(label).trim())
+      .filter(Boolean)
+      .slice(0, 20);
+
+    if (labels.length < 3) {
+      return NextResponse.json({ success: false, error: "Upload at least 3 pieces first" }, { status: 400 });
     }
 
     if (!key) {
-      return NextResponse.json({ success: true, source: "fallback", directions: fallbackDirections(selectedItems) });
+      return NextResponse.json({ success: true, source: "fallback", outfits: fallbackOutfits(labels) });
     }
-
-    const pieces = selectedItems.map((item) => `${item.name ?? "piece"} (${item.color ?? "neutral"})`).join(", ");
 
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
@@ -103,55 +101,53 @@ export async function POST(req: Request) {
             {
               parts: [
                 {
-                  text: `You are Fashlock's head stylist - French, brilliant, warm. You see outfit possibilities nobody else does.
+                  text: `The user owns these clothing pieces: ${labels.join(", ")}
 
-The user owns these pieces: ${pieces}
+Suggest 3 complete outfits they can build using pieces they already own, and for each outfit identify 1-2 missing pieces they should buy to complete it. Be specific about colours and styles.
 
-Create 6 completely different outfit directions using some or all of these pieces. Each direction is for a different occasion and has a completely different energy.
+Return JSON:
+{
+  "outfits": [
+    {
+      "name": "...",
+      "uses": ["piece1", "piece2"],
+      "missing": ["specific missing item description"],
+      "why": "one sentence on why this outfit works"
+    }
+  ]
+}
 
-Use these 6 occasions exactly:
-1. Casual day out
-2. Girls' lunch
-3. Office or work
-4. Evening out
-5. Glam party night
-6. Lazy Sunday
-
-For each occasion return:
-- "occasion": the occasion name
-- "vibe": 3 words that capture the energy (e.g. "effortless, clean, confident")
-- "howToWear": exactly how to style the selected pieces for this occasion - be specific about tucking, layering, rolling sleeves, etc.
-- "addThese": 2 to 3 specific items to add that she likely already owns or can easily get - be specific (e.g. "white leather sneakers" not just "shoes")
-- "avoid": one thing to avoid for this occasion with these pieces
-- "editorialLine": one Fashlock-voice sentence that captures the whole look - make it beautiful
-
-Return ONLY a valid JSON array of 6 objects. No markdown, no explanation.`,
+Return only valid JSON. No markdown, no explanation.`,
                 },
               ],
             },
           ],
+          generationConfig: {
+            temperature: 0.65,
+          },
         }),
       },
     );
 
     if (!res.ok) {
       const err = await res.text();
-      console.error("Gemini error:", res.status, err);
+      console.error("Gemini wardrobe completion error:", res.status, err);
       if (res.status === 429) {
-        return NextResponse.json({ success: true, source: "fallback", directions: fallbackDirections(selectedItems) });
+        return NextResponse.json({ success: true, source: "fallback", outfits: fallbackOutfits(labels) });
       }
 
-      throw new Error(`Gemini styling failed (${res.status})`);
+      throw new Error(`Wardrobe completion failed (${res.status})`);
     }
 
     const data = await res.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!text) {
-      throw new Error("Gemini returned no styling text");
+      throw new Error("Gemini returned no wardrobe completion text");
     }
 
-    return NextResponse.json({ success: true, source: "gemini", directions: JSON.parse(cleanJson(text)) });
+    const outfits = sanitizeOutfits(JSON.parse(cleanJson(text)));
+    return NextResponse.json({ success: true, source: "gemini", outfits: outfits.length ? outfits : fallbackOutfits(labels) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ success: false, error: message }, { status: 500 });

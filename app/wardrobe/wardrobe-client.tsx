@@ -1,8 +1,8 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Plus, Trash2, Upload, X } from "lucide-react";
+import { ChangeEvent, DragEvent, useEffect, useRef, useState } from "react";
+import { Sparkles, Trash2, Upload, X } from "lucide-react";
 import { thumbnailUrl } from "@/lib/image-utils";
 import { cn } from "@/lib/utils";
 
@@ -16,63 +16,11 @@ type WardrobeItem = {
   created_at: string;
 };
 
-type StyleDirection = {
-  occasion: string;
-  vibe: string[] | string;
-  howToWear: string;
-  addThese: string[];
-  avoid: string;
-  editorialLine: string;
-};
-
-type SavedOutfit = {
-  id: string;
-  item_ids: string[];
-  occasion: string | null;
-  gemini_feedback: string | null;
-  created_at: string;
-};
-
-type Tab = "wardrobe" | "style" | "saved";
-
-const tabs: Array<{ id: Tab; label: string }> = [
-  { id: "wardrobe", label: "My Wardrobe" },
-  { id: "style", label: "Style My Pieces" },
-  { id: "saved", label: "Saved Looks" },
-];
-
-const categories = ["Tops", "Bottoms", "Dresses", "Outerwear", "Shoes", "Bags", "Accessories"];
-
-const fashionQuotes = [
-  "Fashion fades, style is eternal. - Yves Saint Laurent",
-  "Simplicity is the keynote of all true elegance. - Coco Chanel",
-  "Elegance is not standing out, but being remembered. - Giorgio Armani",
-  "Style is a way to say who you are without speaking. - Rachel Zoe",
-];
-
-const colorMap: Record<string, string> = {
-  black: "#111111",
-  white: "#f8f5ef",
-  ivory: "#f6efe5",
-  cream: "#efe1c7",
-  beige: "#d3b990",
-  brown: "#74503a",
-  tan: "#c89f72",
-  blue: "#486c9f",
-  navy: "#1b2742",
-  denim: "#5e789c",
-  pink: "#d889a5",
-  red: "#b33a3d",
-  burgundy: "#7f253f",
-  green: "#55775a",
-  olive: "#717348",
-  yellow: "#d8b94a",
-  gold: "#c8a34a",
-  silver: "#bfc1c4",
-  grey: "#8d8982",
-  gray: "#8d8982",
-  purple: "#7c5a8a",
-  orange: "#c97845",
+type CompleteLook = {
+  name: string;
+  uses: string[];
+  missing: string[];
+  why: string;
 };
 
 function fileToBase64(file: File): Promise<string> {
@@ -87,43 +35,25 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-function colorValue(color?: string | null) {
-  if (!color) return "#B9AEA3";
-  const normalized = color.toLowerCase().trim();
-  return colorMap[normalized] ?? normalized;
+function pieceLabel(item: WardrobeItem) {
+  const color = item.color?.trim();
+  const name = item.name?.trim();
+
+  if (name && color && !name.toLowerCase().includes(color.toLowerCase())) return `${color} ${name}`;
+  return name || item.category || "Wardrobe piece";
 }
 
-function directionFromSaved(saved: SavedOutfit): StyleDirection | null {
-  if (!saved.gemini_feedback) return null;
-
-  try {
-    return JSON.parse(saved.gemini_feedback) as StyleDirection;
-  } catch {
-    return null;
-  }
-}
-
-function firstFeedbackLine(saved: SavedOutfit) {
-  const direction = directionFromSaved(saved);
-  if (direction?.editorialLine) return direction.editorialLine;
-  return saved.gemini_feedback?.split(". ")[0] ?? "Saved styling direction";
-}
-
-function LoadingScreen({ mode }: { mode: "upload" | "style" }) {
-  const quote = fashionQuotes[new Date().getSeconds() % fashionQuotes.length];
-
+function LoadingOverlay({ label }: { label: string }) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#FAF7F4] px-6 text-center text-[#2C2A27]"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#FAF7F4]/92 px-6 text-center text-[#2C2A27] backdrop-blur-sm"
     >
       <div>
-        <h2 className="text-4xl italic leading-tight [font-family:var(--font-fashlock-display)] md:text-5xl">
-          {mode === "upload" ? "Analysing your piece..." : "Finding your 6 looks..."}
-        </h2>
-        {mode === "style" ? <p className="mx-auto mt-7 max-w-xl text-sm leading-7 text-[#7A6F65]">{quote}</p> : null}
+        <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-[#B03A5B]">Fashlock wardrobe</p>
+        <h2 className="mt-4 text-4xl italic leading-tight [font-family:var(--font-fashlock-display)] md:text-5xl">{label}</h2>
         <motion.div
           animate={{ width: [42, 132, 42], opacity: [0.45, 1, 0.45] }}
           transition={{ duration: 1.35, repeat: Infinity, ease: "easeInOut" }}
@@ -134,101 +64,45 @@ function LoadingScreen({ mode }: { mode: "upload" | "style" }) {
   );
 }
 
-function WardrobeCard({
-  item,
-  onAdd,
-  onDelete,
-}: {
-  item: WardrobeItem;
-  onAdd?: (item: WardrobeItem) => void;
-  onDelete: (item: WardrobeItem) => void;
-}) {
-  const [showDelete, setShowDelete] = useState(false);
-  const longPress = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  return (
-    <div
-      className="group relative w-[128px] shrink-0"
-      onContextMenu={(event) => {
-        event.preventDefault();
-        setShowDelete(true);
-      }}
-      onTouchStart={() => {
-        longPress.current = setTimeout(() => setShowDelete(true), 520);
-      }}
-      onTouchEnd={() => {
-        if (longPress.current) clearTimeout(longPress.current);
-      }}
-    >
-      <button
-        type="button"
-        onClick={() => onAdd?.(item)}
-        className="relative block aspect-square w-full overflow-hidden rounded-[10px] bg-white outline-none ring-1 ring-transparent transition hover:ring-[#B03A5B]"
-      >
-        <img src={thumbnailUrl(item.image_url, 260, 260)} alt={item.name ?? "Wardrobe item"} className="h-full w-full object-cover" loading="lazy" />
-        {onAdd ? (
-          <span className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-white/92 text-[#B03A5B] opacity-0 shadow-sm transition group-hover:opacity-100">
-            <Plus className="h-4 w-4" />
-          </span>
-        ) : null}
-      </button>
-      <div className="mt-3 flex items-center gap-2">
-        <span className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10" style={{ background: colorValue(item.color) }} />
-        <p className="truncate text-[12px] text-[#2C2A27]">{item.name ?? "Wardrobe piece"}</p>
-      </div>
-      <button
-        type="button"
-        onClick={() => onDelete(item)}
-        className={cn(
-          "absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#B03A5B] shadow-sm transition",
-          showDelete ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-        )}
-        aria-label={`Delete ${item.name ?? "item"}`}
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </button>
-    </div>
-  );
-}
-
 export function WardrobeClient({ className }: { className?: string }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>("wardrobe");
   const [items, setItems] = useState<WardrobeItem[]>([]);
-  const [savedLooks, setSavedLooks] = useState<SavedOutfit[]>([]);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [directions, setDirections] = useState<StyleDirection[]>([]);
-  const [loading, setLoading] = useState<"upload" | "style" | null>(null);
+  const [latestItem, setLatestItem] = useState<WardrobeItem | null>(null);
+  const [outfits, setOutfits] = useState<CompleteLook[]>([]);
+  const [loading, setLoading] = useState<"upload" | "complete" | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const grouped = useMemo(
-    () =>
-      categories.map((category) => ({
-        category,
-        items: items.filter((item) => item.category === category),
-      })),
-    [items],
-  );
-
-  const selectedItems = useMemo(() => selectedIds.map((id) => items.find((item) => item.id === id)).filter(Boolean) as WardrobeItem[], [items, selectedIds]);
-
-  async function refresh() {
-    const [itemsRes, savedRes] = await Promise.all([fetch("/api/wardrobe/items"), fetch("/api/wardrobe/saved")]);
-    const itemsData = await itemsRes.json();
-    const savedData = await savedRes.json();
-
-    if (itemsData.success) setItems(itemsData.items);
-    if (savedData.success) setSavedLooks(savedData.outfits);
-  }
+  const [dragActive, setDragActive] = useState(false);
+  const piecesNeeded = Math.max(0, 3 - items.length);
 
   useEffect(() => {
-    refresh().catch((caught) => setError(caught instanceof Error ? caught.message : "Failed to load wardrobe"));
+    async function loadItems() {
+      try {
+        const res = await fetch("/api/wardrobe/items", { credentials: "include" });
+        const data = await res.json();
+
+        if (!res.ok || !data.success) {
+          throw new Error(data.error ?? "Could not load wardrobe");
+        }
+
+        setItems(data.items || []);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "Could not load wardrobe");
+      }
+    }
+
+    loadItems();
   }, []);
 
   async function uploadFile(file: File | null) {
     if (!file) return;
 
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setError("Upload a jpg, png, or webp image.");
+      return;
+    }
+
     setError(null);
+    setOutfits([]);
     setLoading("upload");
 
     try {
@@ -236,9 +110,10 @@ export function WardrobeClient({ className }: { className?: string }) {
       const res = await fetch("/api/wardrobe/items", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           imageBase64,
-          mediaType: file.type || "image/jpeg",
+          mediaType: file.type,
           fileName: file.name,
         }),
       });
@@ -249,16 +124,19 @@ export function WardrobeClient({ className }: { className?: string }) {
       }
 
       setItems((current) => [data.item, ...current]);
+      setLatestItem(data.item);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Upload failed");
     } finally {
       setLoading(null);
+      setDragActive(false);
       if (inputRef.current) inputRef.current.value = "";
     }
   }
 
   function onDrop(event: DragEvent<HTMLButtonElement>) {
     event.preventDefault();
+    setDragActive(false);
     uploadFile(event.dataTransfer.files?.[0] ?? null);
   }
 
@@ -266,18 +144,14 @@ export function WardrobeClient({ className }: { className?: string }) {
     uploadFile(event.target.files?.[0] ?? null);
   }
 
-  function toggleSelected(item: WardrobeItem) {
-    setDirections([]);
-    setSelectedIds((current) => {
-      if (current.includes(item.id)) return current.filter((id) => id !== item.id);
-      if (current.length >= 5) return current;
-      return [...current, item.id];
-    });
-  }
-
   async function deleteItem(item: WardrobeItem) {
     setError(null);
-    const res = await fetch(`/api/wardrobe/items?id=${encodeURIComponent(item.id)}`, { method: "DELETE" });
+    setOutfits([]);
+
+    const res = await fetch(`/api/wardrobe/items?id=${encodeURIComponent(item.id)}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
     const data = await res.json();
 
     if (!res.ok || !data.success) {
@@ -286,100 +160,94 @@ export function WardrobeClient({ className }: { className?: string }) {
     }
 
     setItems((current) => current.filter((candidate) => candidate.id !== item.id));
-    setSelectedIds((current) => current.filter((id) => id !== item.id));
+    if (latestItem?.id === item.id) setLatestItem(null);
   }
 
-  async function generateDirections() {
-    if (!selectedItems.length) return;
+  async function completeLooks() {
+    if (items.length < 3) return;
 
     setError(null);
-    setLoading("style");
+    setLoading("complete");
 
     try {
       const res = await fetch("/api/wardrobe/style", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ selectedItems }),
+        credentials: "include",
+        body: JSON.stringify({
+          items: items.map((item) => ({
+            name: item.name,
+            color: item.color,
+            category: item.category,
+          })),
+          labels: items.map(pieceLabel),
+        }),
       });
       const data = await res.json();
 
       if (!res.ok || !data.success) {
-        throw new Error(data.error ?? "Could not style these pieces");
+        throw new Error(data.error ?? "Could not complete these looks");
       }
 
-      setDirections(data.directions);
+      setOutfits(Array.isArray(data.outfits) ? data.outfits : []);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not style these pieces");
+      setError(caught instanceof Error ? caught.message : "Could not complete these looks");
     } finally {
       setLoading(null);
     }
   }
 
-  async function saveDirection(direction: StyleDirection) {
-    setError(null);
-    const res = await fetch("/api/wardrobe/saved", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        itemIds: selectedIds,
-        occasion: direction.occasion,
-        geminiFeedback: JSON.stringify(direction),
-      }),
-    });
-    const data = await res.json();
-
-    if (!res.ok || !data.success) {
-      setError(data.error ?? "Could not save look");
-      return;
-    }
-
-    setSavedLooks((current) => [data.outfit, ...current]);
-  }
-
-  async function deleteSaved(saved: SavedOutfit) {
-    const res = await fetch(`/api/wardrobe/saved?id=${encodeURIComponent(saved.id)}`, { method: "DELETE" });
-    const data = await res.json();
-
-    if (!res.ok || !data.success) {
-      setError(data.error ?? "Could not delete saved look");
-      return;
-    }
-
-    setSavedLooks((current) => current.filter((look) => look.id !== saved.id));
-  }
-
-  function openSaved(saved: SavedOutfit) {
-    setSelectedIds(saved.item_ids.filter((id) => items.some((item) => item.id === id)).slice(0, 5));
-    const direction = directionFromSaved(saved);
-    setDirections(direction ? [direction] : []);
-    setActiveTab("style");
-  }
-
   return (
     <div className={cn("min-h-screen bg-[#FAF7F4] text-[#2C2A27] [font-family:var(--font-fashlock-body)]", className)}>
-      <AnimatePresence>{loading ? <LoadingScreen mode={loading} /> : null}</AnimatePresence>
+      <AnimatePresence>{loading ? <LoadingOverlay label={loading === "upload" ? "Analysing your piece..." : "Finding what completes the look..."} /> : null}</AnimatePresence>
 
-      <main className="px-6 pb-24 pt-14 md:px-[120px]">
-        <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+      <main className="mx-auto max-w-7xl px-5 pb-24 pt-12 md:px-10 lg:px-16">
+        <section className="grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-end">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-[#7A6F65]">Fashlock wardrobe</p>
-            <h1 className="mt-4 text-5xl italic leading-none [font-family:var(--font-fashlock-display)] md:text-7xl">
-              Your pieces, styled beautifully.
+            <p className="text-[11px] font-semibold uppercase tracking-[0.34em] text-[#B03A5B]">Wardrobe</p>
+            <h1 className="mt-5 max-w-3xl text-5xl italic leading-[0.95] [font-family:var(--font-fashlock-display)] md:text-7xl">
+              Your wardrobe, made smarter.
             </h1>
+            <p className="mt-6 max-w-xl text-sm leading-7 text-[#7A6F65] md:text-base">
+              Upload pieces you own. We'll tell you what to add to complete the look.
+            </p>
           </div>
-          <div className="flex gap-6 overflow-x-auto text-[11px] font-semibold uppercase tracking-[0.18em] text-[#7A6F65]">
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className={cn("whitespace-nowrap pb-2 transition", activeTab === tab.id ? "border-b border-[#B03A5B] text-[#B03A5B]" : "border-b border-transparent")}
+
+          <div className="rounded-[14px] border border-[#E5DAD0] bg-[#F0EBE3] p-4 md:p-5">
+            <button
+              type="button"
+              onClick={() => inputRef.current?.click()}
+              onDragEnter={() => setDragActive(true)}
+              onDragLeave={() => setDragActive(false)}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={onDrop}
+              className={cn(
+                "flex min-h-[190px] w-full flex-col items-center justify-center rounded-[12px] border border-dashed px-6 py-8 text-center transition",
+                dragActive ? "border-[#B03A5B] bg-white" : "border-[#B03A5B]/35 bg-[#FAF7F4]/55 hover:bg-white/70",
+              )}
+            >
+              <Upload className="mb-5 h-5 w-5 text-[#B03A5B]" />
+              <span className="text-2xl italic [font-family:var(--font-fashlock-display)]">Drop a piece here</span>
+              <span className="mt-3 text-[12px] uppercase tracking-[0.2em] text-[#8C7B6E]">or click to upload</span>
+              <span className="mt-4 text-xs text-[#9B8C80]">jpg, png, webp</span>
+            </button>
+            <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={onPick} />
+
+            {latestItem ? (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mt-4 flex items-center gap-4 rounded-[12px] bg-white/70 p-3"
               >
-                {tab.label}
-              </button>
-            ))}
+                <img src={thumbnailUrl(latestItem.image_url, 120, 120)} alt={pieceLabel(latestItem)} className="h-16 w-16 rounded-[10px] object-cover" />
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#B03A5B]">Added</p>
+                  <p className="mt-1 text-sm text-[#2C2A27]">{pieceLabel(latestItem)}</p>
+                </div>
+              </motion.div>
+            ) : null}
           </div>
-        </div>
+        </section>
 
         {error ? (
           <div className="mt-8 flex items-start justify-between gap-4 rounded-[12px] bg-white px-5 py-4 text-sm leading-6 text-[#B03A5B] shadow-[0_2px_12px_rgba(0,0,0,0.06)]">
@@ -390,190 +258,109 @@ export function WardrobeClient({ className }: { className?: string }) {
           </div>
         ) : null}
 
-        {activeTab === "wardrobe" ? (
-          <section className="mt-12">
-            <button
-              type="button"
-              onClick={() => inputRef.current?.click()}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={onDrop}
-              className="flex w-full flex-col items-center justify-center rounded-[12px] border border-dashed border-[#B03A5B]/30 px-6 py-8 text-center transition hover:bg-white/45"
-            >
-              <Upload className="mb-5 h-5 w-5 text-[#B03A5B]" />
-              <span className="text-3xl italic [font-family:var(--font-fashlock-display)]">Add to your wardrobe</span>
-              <span className="mt-3 text-[13px] text-[#7A6F65]">Drop an image or click to upload</span>
-            </button>
-            <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={onPick} />
+        <section className="mt-16">
+          <div className="flex items-end justify-between gap-6">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-[#7A6F65]">Your pieces</p>
+              <h2 className="mt-3 text-4xl italic [font-family:var(--font-fashlock-display)]">The closet map</h2>
+            </div>
+            <p className="text-sm text-[#8C7B6E]">{items.length} {items.length === 1 ? "piece" : "pieces"}</p>
+          </div>
 
-            <div className="mt-14 space-y-12">
-              {grouped.map((group) => (
-                <div key={group.category}>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#7A6F65]">{group.category}</p>
-                  {group.items.length ? (
-                    <div className="scrollbar-none mt-5 flex gap-5 overflow-x-auto pb-2">
-                      {group.items.map((item) => (
-                        <WardrobeCard key={item.id} item={item} onAdd={toggleSelected} onDelete={deleteItem} />
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-5 text-[13px] text-[#7A6F65]">No pieces here yet.</p>
-                  )}
-                </div>
+          {items.length ? (
+            <div className="mt-8 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+              {items.map((item) => (
+                <article key={item.id} className="group relative">
+                  <div className="aspect-[4/5] overflow-hidden rounded-[12px] bg-[#EEE8E1]">
+                    <img src={thumbnailUrl(item.image_url, 360, 450)} alt={pieceLabel(item)} className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.02]" loading="lazy" />
+                  </div>
+                  <div className="mt-3 pr-9">
+                    <p className="truncate text-sm text-[#2C2A27]">{pieceLabel(item)}</p>
+                    <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-[#9B8C80]">{item.category}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => deleteItem(item)}
+                    className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-[#FAF7F4]/90 text-[#B03A5B] opacity-100 shadow-sm backdrop-blur transition md:opacity-0 md:group-hover:opacity-100"
+                    aria-label={`Delete ${pieceLabel(item)}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </article>
               ))}
             </div>
-          </section>
-        ) : null}
+          ) : (
+            <div className="mt-8 rounded-[14px] border border-[#E5DAD0] bg-[#F0EBE3] px-6 py-14 text-center">
+              <p className="text-3xl italic [font-family:var(--font-fashlock-display)]">Start with one piece.</p>
+              <p className="mt-3 text-sm text-[#8C7B6E]">A shirt, trouser, shoe, bag, anything you actually own.</p>
+            </div>
+          )}
+        </section>
 
-        {activeTab === "style" ? (
-          <section className="mt-12">
-            {!items.length ? (
-              <div className="flex min-h-[420px] flex-col items-center justify-center text-center">
-                <h2 className="text-4xl italic [font-family:var(--font-fashlock-display)]">Your wardrobe is empty</h2>
-                <p className="mt-4 text-sm text-[#7A6F65]">Upload your first piece to start styling</p>
+        {items.length > 0 ? (
+          <section className="mt-[72px] rounded-[16px] bg-[#2C2418] px-5 py-8 text-[#FAF7F4] md:px-8 md:py-10">
+            <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.32em] text-[#DCA0B0]">Complete this look</p>
+                <h2 className="mt-3 text-4xl italic [font-family:var(--font-fashlock-display)]">What you're missing.</h2>
+                <p className="mt-4 max-w-2xl text-sm leading-7 text-[#D8CCC0]">
+                  We'll use your uploaded pieces and suggest the few smart additions that make them feel like complete outfits.
+                </p>
+              </div>
+              {items.length >= 3 ? (
                 <button
                   type="button"
-                  onClick={() => setActiveTab("wardrobe")}
-                  className="mt-8 rounded-full border border-[#B03A5B] px-6 py-3 text-sm font-semibold text-[#B03A5B]"
+                  onClick={completeLooks}
+                  className="inline-flex items-center justify-center gap-2 rounded-full bg-[#B03A5B] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[#982F4D]"
                 >
-                  Add a piece
+                  <Sparkles className="h-4 w-4" />
+                  See what to add
+                </button>
+              ) : (
+                <p className="max-w-sm rounded-[12px] border border-[#FAF7F4]/15 bg-[#FAF7F4]/8 px-5 py-4 text-sm leading-6 text-[#D8CCC0]">
+                  Add {piecesNeeded} more {piecesNeeded === 1 ? "piece" : "pieces"} to see what's missing from your outfits.
+                </p>
+              )}
+            </div>
+
+            {outfits.length ? (
+              <div className="mt-8">
+                <div className="grid gap-5 lg:grid-cols-3">
+                  {outfits.map((outfit) => (
+                    <motion.article
+                      key={outfit.name}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="rounded-[14px] bg-[#FAF7F4] p-5 text-[#2C2A27]"
+                    >
+                      <h3 className="text-2xl italic leading-tight [font-family:var(--font-fashlock-display)]">{outfit.name}</h3>
+                      <p className="mt-5 text-[10px] font-semibold uppercase tracking-[0.24em] text-[#8C7B6E]">Uses</p>
+                      <div className="mt-3 space-y-2">
+                        {outfit.uses.map((piece) => (
+                          <p key={piece} className="text-sm text-[#2C2A27]">{piece}</p>
+                        ))}
+                      </div>
+                      <p className="mt-5 text-[10px] font-semibold uppercase tracking-[0.24em] text-[#B03A5B]">Missing</p>
+                      <div className="mt-3 space-y-2">
+                        {outfit.missing.map((piece) => (
+                          <p key={piece} className="rounded-[10px] bg-[#B03A5B]/10 px-3 py-2 text-sm text-[#B03A5B]">{piece}</p>
+                        ))}
+                      </div>
+                      <p className="mt-5 text-sm italic leading-6 text-[#7A6F65]">{outfit.why}</p>
+                    </motion.article>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.location.href = "/style?wardrobe=true";
+                  }}
+                  className="mt-7 inline-flex rounded-full border border-[#FAF7F4]/35 px-6 py-3 text-sm font-semibold text-[#FAF7F4] transition hover:border-[#DCA0B0] hover:text-[#DCA0B0]"
+                >
+                  Not sure what actually suits you? Ask Laila →
                 </button>
               </div>
-            ) : directions.length ? (
-              <div>
-                <div className="sticky top-[77px] z-30 -mx-6 flex items-center justify-between gap-5 border-y border-[#2C2A27]/10 bg-[#FAF7F4]/95 px-6 py-4 backdrop-blur md:-mx-[120px] md:px-[120px]">
-                  <div className="flex items-center gap-4 overflow-hidden">
-                    <div className="flex -space-x-2">
-                      {selectedItems.map((item) => (
-                        <img key={item.id} src={thumbnailUrl(item.image_url, 80, 80)} alt={item.name ?? "Selected piece"} className="h-10 w-10 rounded-full object-cover ring-2 ring-[#FAF7F4]" loading="lazy" />
-                      ))}
-                    </div>
-                    <p className="truncate text-[13px] text-[#7A6F65]">Styling these pieces</p>
-                  </div>
-                  <button type="button" onClick={() => setDirections([])} className="shrink-0 text-sm text-[#B03A5B]">
-                    Change pieces
-                  </button>
-                </div>
-
-                <h2 className="mt-12 text-5xl italic leading-none [font-family:var(--font-fashlock-display)]">6 ways to wear these</h2>
-                <div className="mt-10 grid gap-6 lg:grid-cols-2">
-                  {directions.map((direction) => {
-                    const vibes = Array.isArray(direction.vibe) ? direction.vibe : direction.vibe.split(",").map((vibe) => vibe.trim());
-                    return (
-                      <article key={direction.occasion} className="rounded-[12px] bg-white p-6 shadow-[0_2px_12px_rgba(0,0,0,0.06)] transition hover:shadow-[0_8px_24px_rgba(0,0,0,0.08)]">
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#7A6F65]">{direction.occasion}</p>
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          {vibes.slice(0, 3).map((vibe) => (
-                            <span key={vibe} className="rounded-full bg-[#B03A5B]/10 px-3 py-1 text-[12px] text-[#B03A5B]">
-                              {vibe}
-                            </span>
-                          ))}
-                        </div>
-                        <p className="mt-6 text-[16px] italic leading-7 [font-family:var(--font-fashlock-display)]">{direction.editorialLine}</p>
-                        <div className="my-6 h-px bg-[#B03A5B]" />
-                        <p className="text-[13px] leading-7 text-[#2C2A27]">{direction.howToWear}</p>
-                        <p className="mt-6 text-[11px] font-semibold uppercase tracking-[0.22em] text-[#7A6F65]">Add these</p>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {direction.addThese?.map((addition) => (
-                            <span key={addition} className="rounded-full bg-[#EEE8E1] px-3 py-1 text-[12px] text-[#2C2A27]">
-                              {addition}
-                            </span>
-                          ))}
-                        </div>
-                        <p className="mt-5 text-[12px] italic leading-6 text-[#7A6F65]">Avoid: {direction.avoid}</p>
-                        <button
-                          type="button"
-                          onClick={() => saveDirection(direction)}
-                          className="mt-6 rounded-full bg-[#B03A5B] px-5 py-2.5 text-sm font-semibold text-white"
-                        >
-                          Save look
-                        </button>
-                      </article>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : (
-              <div>
-                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-                  {items.map((item) => {
-                    const selected = selectedIds.includes(item.id);
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => toggleSelected(item)}
-                        className={cn("group relative text-left", selectedIds.length >= 5 && !selected ? "opacity-45" : "opacity-100")}
-                      >
-                        <span className={cn("block aspect-square overflow-hidden rounded-[12px] bg-white ring-1 transition", selected ? "ring-2 ring-[#B03A5B]" : "ring-transparent")}>
-                          <img src={thumbnailUrl(item.image_url, 360, 360)} alt={item.name ?? "Wardrobe item"} className="h-full w-full object-cover transition group-hover:scale-[1.02]" loading="lazy" />
-                        </span>
-                        {selected ? (
-                          <span className="absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-full bg-[#B03A5B] text-white">
-                            <Check className="h-4 w-4" />
-                          </span>
-                        ) : null}
-                        <span className="mt-3 block truncate text-[13px] text-[#2C2A27]">{item.name ?? "Wardrobe piece"}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {selectedItems.length ? (
-                  <div className="fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-5 rounded-full bg-[#2C2A27] px-5 py-3 text-white shadow-[0_10px_32px_rgba(0,0,0,0.18)]">
-                    <span className="text-sm">{selectedItems.length} pieces selected</span>
-                    <button type="button" onClick={generateDirections} className="rounded-full bg-[#B03A5B] px-5 py-2 text-sm font-semibold">
-                      Style these
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </section>
-        ) : null}
-
-        {activeTab === "saved" ? (
-          <section className="mt-12">
-            {savedLooks.length ? (
-              <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-                {savedLooks.map((saved) => {
-                  const lookItems = saved.item_ids.map((id) => items.find((item) => item.id === id)).filter(Boolean) as WardrobeItem[];
-                  return (
-                    <article key={saved.id} className="group relative rounded-[12px] bg-white p-5 shadow-[0_2px_12px_rgba(0,0,0,0.06)]">
-                      <button type="button" onClick={() => openSaved(saved)} className="block w-full text-left">
-                        <div className="grid aspect-[4/3] grid-cols-3 gap-2 overflow-hidden rounded-[10px] bg-[#FAF7F4] p-3">
-                          {lookItems.slice(0, 5).map((item, index) => (
-                            <img
-                              key={item.id}
-                              src={thumbnailUrl(item.image_url, index === 0 ? 420 : 180, index === 0 ? 420 : 180)}
-                              alt={item.name ?? "Saved item"}
-                              className={cn("h-full w-full rounded-[8px] object-cover", index === 0 ? "col-span-2 row-span-2" : "")}
-                              loading="lazy"
-                            />
-                          ))}
-                        </div>
-                        <p className="mt-5 text-[11px] font-semibold uppercase tracking-[0.22em] text-[#7A6F65]">{saved.occasion ?? "Saved look"}</p>
-                        <p className="mt-3 line-clamp-2 text-[15px] italic leading-7 [font-family:var(--font-fashlock-display)]">{firstFeedbackLine(saved)}</p>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => deleteSaved(saved)}
-                        className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-white text-[#B03A5B] opacity-0 shadow-sm transition group-hover:opacity-100"
-                        aria-label="Delete saved look"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </article>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="flex min-h-[360px] items-center justify-center text-center">
-                <div>
-                  <h2 className="text-4xl italic [font-family:var(--font-fashlock-display)]">No saved looks yet</h2>
-                  <p className="mt-4 text-sm text-[#7A6F65]">Style a few pieces, then save the directions you love.</p>
-                </div>
-              </div>
-            )}
+            ) : null}
           </section>
         ) : null}
       </main>

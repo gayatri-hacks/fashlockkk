@@ -8,6 +8,10 @@ interface TrendingNowProps {
   onTrendClick: (trend: TrendData) => void
 }
 
+function trendAnchorId(id: number) {
+  return `trend-card-${id}`
+}
+
 export default function TrendingNow({ trends, loading, onTrendClick }: TrendingNowProps) {
   const imageStyle = {
     width: '100%',
@@ -162,6 +166,7 @@ export default function TrendingNow({ trends, loading, onTrendClick }: TrendingN
         {/* First card - full width, tall */}
         {trends[0] && (
           <div
+            id={trendAnchorId(trends[0].id)}
             onClick={() => onTrendClick(trends[0])}
             style={{
               cursor: 'pointer',
@@ -254,6 +259,7 @@ export default function TrendingNow({ trends, loading, onTrendClick }: TrendingN
         <div className="grid grid-cols-2 gap-6">
           {trends.slice(1, 3).map((trend) => (
             <div
+              id={trendAnchorId(trend.id)}
               key={trend.id}
               onClick={() => onTrendClick(trend)}
               style={{
@@ -328,6 +334,7 @@ export default function TrendingNow({ trends, loading, onTrendClick }: TrendingN
         <div className="grid grid-cols-3 gap-6">
           {trends.slice(3, 6).map((trend) => (
             <div
+              id={trendAnchorId(trend.id)}
               key={trend.id}
               onClick={() => onTrendClick(trend)}
               style={{

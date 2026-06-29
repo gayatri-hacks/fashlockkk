@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseClient, logSupabaseFallback, supabaseCache, supabaseCacheTtl } from '@/lib/supabase'
+import { getAuthenticatedUserId } from '@/lib/supabase-auth'
+import { getLatestTrendMonth, getTopTrendingKeywords, trendVelocityLabel } from '@/lib/trend-velocity'
 
-export const revalidate = 3600 // 1 hour cache
+export const dynamic = 'force-dynamic'
 const GEMINI_MODEL = 'gemini-2.5-flash'
 
 const MARKET_META: Record<string, { market: string; flag: string }> = {
@@ -83,6 +85,103 @@ async function callGemini(prompt: string): Promise<string> {
   } catch (e) {
     console.error('Gemini call error:', e)
     return ''
+  }
+}
+
+function cleanGeminiJson(text: string) {
+  return text.replace(/```json|```/g, '').trim()
+}
+
+function hasText(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function hasList(value: unknown) {
+  return Array.isArray(value) && value.some((item) => hasText(item))
+}
+
+function hasSavedUserStyleProfile(profile: any) {
+  if (!profile) return false
+
+  return Boolean(
+    hasText(profile.primary_archetype) ||
+      hasText(profile.secondary_archetype) ||
+      hasList(profile.preferred_colors) ||
+      hasList(profile.preferred_eras) ||
+      hasList(profile.preferred_moods)
+  )
+}
+
+function formatList(value: unknown) {
+  return Array.isArray(value) ? value.filter(hasText).join(', ') : ''
+}
+
+function styleProfilePrompt(profile: any) {
+  return `- Primary style archetype: ${profile?.primary_archetype || 'Unknown'}
+- Secondary archetype: ${profile?.secondary_archetype || 'None'}
+- Preferred colours: ${formatList(profile?.preferred_colors) || 'Unknown'}
+- Preferred eras: ${formatList(profile?.preferred_eras) || 'Unknown'}
+- Preferred moods: ${formatList(profile?.preferred_moods) || 'Unknown'}`
+}
+
+async function getSavedUserStyleProfile(supabase: any) {
+  const userId = await getAuthenticatedUserId()
+  if (!userId) return null
+
+  const { data, error } = await supabase
+    .from('user_style_profiles')
+    .select('primary_archetype,secondary_archetype,preferred_colors,preferred_eras,preferred_moods')
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (error) {
+    console.error('Trending for You user style profile fetch failed:', error.message)
+    return null
+  }
+
+  return hasSavedUserStyleProfile(data) ? data : null
+}
+
+async function generatePersonalizedTrendNotes(profile: any, trends: any[]) {
+  const topTrends = trends.slice(0, 5)
+  if (!profile || !topTrends.length) return []
+
+  const trendNames = topTrends.map((trend) => trend.editorialName || trend.keyword).filter(Boolean)
+  const prompt = `Given this user's style profile:
+${styleProfilePrompt(profile)}
+
+And these current trending items:
+${trendNames.join(', ')}
+
+For each trend, write ONE short sentence (max 12 words) explaining specifically why it suits this user's archetype, colour preferences, or aesthetic. Be specific and personal.
+
+Return JSON only:
+{ "notes": [{ "trend": "...", "note": "..." }] }`
+
+  const response = await callGemini(prompt)
+  try {
+    const parsed = JSON.parse(cleanGeminiJson(response))
+    const rawNotes = Array.isArray(parsed.notes) ? parsed.notes : []
+    return topTrends
+      .map((trend) => {
+        const trendName = trend.editorialName || trend.keyword
+        const match = rawNotes.find((item: any) => String(item?.trend || '').toLowerCase() === String(trendName).toLowerCase())
+        const looseMatch = match || rawNotes.find((item: any) => String(item?.trend || '').toLowerCase().includes(String(trend.keyword || '').toLowerCase()))
+        const indexFallback = rawNotes[topTrends.indexOf(trend)]
+        const note = String(looseMatch?.note || indexFallback?.note || '').trim()
+        return note
+          ? {
+              id: trend.id,
+              keyword: trend.keyword,
+              editorialName: trendName,
+              note: note.slice(0, 140),
+            }
+          : null
+      })
+      .filter(Boolean)
+  } catch (error) {
+    console.error('Trending for You note parse failed:', error)
+    return []
   }
 }
 
@@ -183,17 +282,6 @@ Return ONLY the JSON, no markdown, no explanation.`
   }
 }
 
-async function getLatestDate(supabase: any): Promise<string> {
-  const { data } = await supabase
-    .from('historical_trend_data')
-    .select('month')
-    .eq('market', 'IN')
-    .order('month', { ascending: false })
-    .limit(1)
-
-  return data?.[0]?.month || '2026-04-01'
-}
-
 export async function GET() {
   try {
     const supabase = getSupabaseClient()
@@ -203,53 +291,14 @@ export async function GET() {
     }
 
     const data = await supabaseCache('trends-overview-data:in', supabaseCacheTtl('historical_trend_data'), async () => {
-      const latestDate = await getLatestDate(supabase)
-
-      // Fetch top 6 trends from IN market for Trending Now
-      const { data: trendingData, error: trendingError } = await supabase
-        .from('historical_trend_data')
-        .select('keyword_id, google_score')
-        .eq('market', 'IN')
-        .eq('month', latestDate)
-        .order('google_score', { ascending: false })
-        .limit(6)
-      if (trendingError) throw trendingError
-
-      // Get 3 month old data for velocity calculation
-      const threeMonthsAgo = new Date(new Date(latestDate).getTime() - 90 * 24 * 60 * 60 * 1000)
-        .toISOString()
-        .split('T')[0]
-
-      const { data: threeMonthData, error: threeMonthError } = await supabase
-        .from('historical_trend_data')
-        .select('keyword_id, google_score')
-        .eq('market', 'IN')
-        .eq('month', threeMonthsAgo)
-        .limit(100)
-      if (threeMonthError) throw threeMonthError
-
-      const threeMonthMap = new Map(threeMonthData?.map((d: any) => [d.keyword_id, d.google_score]) || [])
-
-      // Get keyword names
-      const trendingKeywordIds = trendingData?.map((d: any) => d.keyword_id) || []
-      const { data: keywords, error: keywordsError } = await supabase
-        .from('trend_keywords')
-        .select('id, keyword')
-        .in('id', trendingKeywordIds)
-      if (keywordsError) throw keywordsError
-
-      const keywordMap = new Map(keywords?.map((k: any) => [k.id, k.keyword]) || [])
+      const latestDate = (await getLatestTrendMonth(supabase, 'IN')) || '2026-04-01'
+      const trendingData = await getTopTrendingKeywords('IN', 6)
 
       // Generate trend data with Gemini
       const trendingTrends = await Promise.all(
-        (trendingData || []).map(async (trend: any) => {
-        const keyword = keywordMap.get(trend.keyword_id) || ''
-        const threeMonthValue = threeMonthMap.get(trend.keyword_id) || 0
-        const currentValue = trend.google_score || 0
-
-        let velocity = 'PEAKING'
-        if (currentValue > threeMonthValue * 1.1) velocity = 'RISING'
-        if (currentValue < threeMonthValue * 0.9) velocity = 'FADING'
+        (trendingData || []).map(async (trend) => {
+        const keyword = trend.keyword
+        const velocity = trendVelocityLabel(trend.score, trend.comparisonScore)
 
         const geminiData = await generateTrendData(keyword)
 
@@ -263,7 +312,7 @@ export async function GET() {
         const { data: marketData, error: marketError } = await supabase
           .from('historical_trend_data')
           .select('market, google_score')
-          .eq('keyword_id', trend.keyword_id)
+          .eq('keyword_id', trend.keywordId)
           .eq('month', latestDate)
           .order('google_score', { ascending: false })
           .limit(2)
@@ -278,14 +327,14 @@ export async function GET() {
         const { data: trendHistory, error: trendHistoryError } = await supabase
           .from('historical_trend_data')
           .select('month, google_score')
-          .eq('keyword_id', trend.keyword_id)
+          .eq('keyword_id', trend.keywordId)
           .eq('market', 'IN')
           .order('month', { ascending: true })
           .limit(24)
         if (trendHistoryError) throw trendHistoryError
 
         return {
-          id: trend.keyword_id,
+          id: trend.keywordId,
           keyword,
           editorialName,
           oneLiner: geminiData?.oneLiner || 'A trend worth watching',
@@ -300,35 +349,14 @@ export async function GET() {
       )
 
       // Fetch top 50 IN trends for The Cycle. This is capped and cached for egress control.
-      const { data: allTrendsData, error: allTrendsError } = await supabase
-        .from('historical_trend_data')
-        .select('keyword_id, google_score')
-        .eq('market', 'IN')
-        .eq('month', latestDate)
-        .order('google_score', { ascending: false })
-        .limit(50)
-      if (allTrendsError) throw allTrendsError
+      const allTrendsData = await getTopTrendingKeywords('IN', 50)
 
-      const allTrendKeywordIds = allTrendsData?.map((d: any) => d.keyword_id) || []
-      const { data: allKeywords, error: allKeywordsError } = await supabase
-        .from('trend_keywords')
-        .select('id, keyword')
-        .in('id', allTrendKeywordIds)
-      if (allKeywordsError) throw allKeywordsError
-
-      const allKeywordMap = new Map(allKeywords?.map((k: any) => [k.id, k.keyword]) || [])
-
-      const cycleTrends = (allTrendsData || []).map((trend: any) => {
-      const keyword = allKeywordMap.get(trend.keyword_id) || ''
-      const threeMonthValue = threeMonthMap.get(trend.keyword_id) || 0
-      const currentValue = trend.google_score || 0
-
-      let velocity = 'PEAKING'
-      if (currentValue > threeMonthValue * 1.1) velocity = 'RISING'
-      if (currentValue < threeMonthValue * 0.9) velocity = 'FADING'
+      const cycleTrends = (allTrendsData || []).map((trend) => {
+      const keyword = trend.keyword
+      const velocity = trendVelocityLabel(trend.score, trend.comparisonScore)
 
       return {
-        id: trend.keyword_id,
+        id: trend.keywordId,
         keyword,
         editorialName: keyword,
         oneLiner: '',
@@ -347,7 +375,13 @@ export async function GET() {
       }
     })
 
-    return NextResponse.json(data)
+    const profile = await getSavedUserStyleProfile(supabase)
+    const trendingForYou = profile ? await generatePersonalizedTrendNotes(profile, data.trendingTrends || []) : []
+
+    return NextResponse.json({
+      ...data,
+      trendingForYou,
+    })
   } catch (error) {
     console.error('Error fetching overview data:', error)
     logSupabaseFallback(error)

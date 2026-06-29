@@ -8,8 +8,6 @@ type LegacyArticlePageProps = {
 export default async function LegacyArticlePage({ params }: LegacyArticlePageProps) {
   const { slug } = await params;
   const article = seedArticles.find((item) => item.slug === slug);
-  const topic = article?.title ?? slug.replace(/-/g, " ");
 
-  redirect(`/article?topic=${encodeURIComponent(topic)}`);
+  redirect(article ? `/discover/article/${article.slug}` : "/discover");
 }
-

@@ -4,6 +4,7 @@ import { Search } from 'lucide-react'
 import { FormEvent, useEffect, useState } from 'react'
 
 interface TrendsHeroProps {
+  initialQuery?: string
   onTrendSearch: (query: string) => void
 }
 
@@ -16,9 +17,13 @@ const PLACEHOLDERS = [
   'Search cargo trousers...',
 ]
 
-export default function TrendsHero({ onTrendSearch }: TrendsHeroProps) {
-  const [query, setQuery] = useState('')
+export default function TrendsHero({ initialQuery = '', onTrendSearch }: TrendsHeroProps) {
+  const [query, setQuery] = useState(initialQuery)
   const [placeholderIndex, setPlaceholderIndex] = useState(0)
+
+  useEffect(() => {
+    setQuery(initialQuery)
+  }, [initialQuery])
 
   useEffect(() => {
     const timer = window.setInterval(() => {

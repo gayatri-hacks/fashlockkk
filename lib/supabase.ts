@@ -63,6 +63,15 @@ export async function supabaseCache<T>(
   return value;
 }
 
+export function clearSupabaseCache(key: string) {
+  memoryCache.delete(key);
+}
+
+export function hasFreshSupabaseCache(key: string) {
+  const cached = memoryCache.get(key);
+  return Boolean(cached && cached.expiresAt > Date.now());
+}
+
 export function logSupabaseFallback(error?: unknown) {
   console.log("Supabase limit hit, using fallback data");
   if (error) {
