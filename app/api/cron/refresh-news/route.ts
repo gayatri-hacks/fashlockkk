@@ -1,10 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+import { getSupabaseClient, hasSupabaseEnv } from '@/lib/supabase'
 
 const KEY = process.env.NEWSDATA_API_KEY
 
@@ -46,6 +41,9 @@ function detectType(title: string, summary: string): 'news' | 'history' {
 }
 
 async function fetchAndStore(country: string, query: string) {
+  const supabase = getSupabaseClient()
+  if (!supabase) return 0
+
   try {
     const res = await fetch(
       `https://newsdata.io/api/1/news?apikey=${KEY}&q=${encodeURIComponent(query)}&language=en`,
@@ -94,6 +92,9 @@ async function fetchAndStore(country: string, query: string) {
 }
 
 async function pruneOldArticles() {
+  const supabase = getSupabaseClient()
+  if (!supabase) return
+
   // Keep only last 7 days of articles so table stays lean
   const cutoff = new Date()
   cutoff.setDate(cutoff.getDate() - 7)
@@ -104,6 +105,10 @@ async function pruneOldArticles() {
 }
 
 export async function GET(req: Request) {
+  if (!hasSupabaseEnv()) {
+    return NextResponse.json({ ok: false, skipped: true, reason: 'Missing Supabase environment' })
+  }
+
   // Optional: protect with a secret so only you can trigger it manually
   const { searchParams } = new URL(req.url)
   const secret = searchParams.get('secret')
