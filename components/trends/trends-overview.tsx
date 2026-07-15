@@ -5,7 +5,6 @@ import { TrendData } from '@/app/trends/page'
 import TrendsHero from './sections/trends-hero'
 import TrendingNow from './sections/trending-now'
 import TheCycle from './sections/the-cycle'
-import AroundTheWorld from './sections/around-the-world'
 
 interface TrendsOverviewProps {
   initialSearchQuery?: string
@@ -170,7 +169,6 @@ export default function TrendsOverview({ initialSearchQuery = '', onTrendClick, 
       <TrendsHero initialQuery={initialSearchQuery} onTrendSearch={onTrendSearch} />
       <TrendingNow trends={trendingTrends} loading={loading} onTrendClick={onTrendClick} />
       <TheCycle trends={cycleTrends} loading={loading} onTrendClick={onTrendClick} />
-      <AroundTheWorld onTrendClick={onTrendClick} />
     </div>
   )
 }

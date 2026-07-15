@@ -4,6 +4,7 @@ import { getAuthenticatedUserId } from "@/lib/supabase-auth";
 import { getSupabaseClient, logSupabaseFallback } from "@/lib/supabase";
 import { buildStyleBrief, type StyleBriefProfile } from "@/lib/style-brief";
 import type { PredictPageData, PredictTrend } from "@/lib/predict-page";
+import { getTopTrendingKeywords } from "@/lib/trend-velocity";
 
 export const revalidate = 21600;
 
@@ -57,36 +58,12 @@ async function loadTrendSignals(): Promise<PredictPageData> {
   const empty = { season, year, predictions: [], menswearPredictions: [], shift: null, globalHeat: [] };
   if (!supabase) return empty;
 
-  const latestResult = await supabase
-    .from("historical_trend_data")
-    .select("month")
-    .eq("market", "IN")
-    .order("month", { ascending: false })
-    .limit(1);
+  const trendSignals = await getTopTrendingKeywords("IN", 12);
+  if (!trendSignals.length) return empty;
 
-  const latestMonth = latestResult.data?.[0]?.month;
-  if (latestResult.error || !latestMonth) return empty;
-
-  const topResult = await supabase
-    .from("historical_trend_data")
-    .select("keyword_id, google_score")
-    .eq("market", "IN")
-    .eq("month", latestMonth)
-    .order("google_score", { ascending: false })
-    .limit(12);
-
-  if (topResult.error) return empty;
-
-  const ids = [...new Set((topResult.data || []).map((row) => row.keyword_id).filter(Boolean))].slice(0, 12);
-  if (!ids.length) return empty;
-
-  const { data: keywords, error: keywordError } = await supabase.from("trend_keywords").select("id, keyword").in("id", ids);
-  if (keywordError) return empty;
-
-  const keywordMap = new Map((keywords || []).map((row) => [row.id, row.keyword]));
-  const predictions = (topResult.data || [])
+  const predictions = trendSignals
     .map((row): PredictTrend | null => {
-      const keyword = keywordMap.get(row.keyword_id);
+      const keyword = row.keyword;
       if (!keyword) return null;
       const trendName = titleCase(keyword);
       return {
@@ -96,11 +73,11 @@ async function loadTrendSignals(): Promise<PredictPageData> {
         prediction: `${trendName} is worth trying through one practical piece, not a full costume.`,
         whyNow: `${trendName} is rising because wardrobes are leaning toward easy updates with personality.`,
         styleNote: `Try one ${keyword} piece with quiet basics.`,
-        confidenceLevel: confidenceFromScore(row.google_score || 0),
+        confidenceLevel: confidenceFromScore(row.score || 0),
         pexelsQuery: `${keyword} outfit`,
         shopTerms: [`${keyword} outfit`, `${keyword} fashion`],
-        velocity: row.google_score || 0,
-        currentScore: row.google_score || 0,
+        velocity: Math.round((row.velocity || 0) * 100),
+        currentScore: row.score || 0,
         markets: [],
         imageUrl: null,
       };

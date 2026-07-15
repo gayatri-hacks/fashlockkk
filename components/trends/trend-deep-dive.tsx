@@ -30,7 +30,13 @@ type StyleModeData = {
   starterSearchTerm: string
 }
 
-type OutfitImageState = Record<GenderEdit, Record<string, string | null>>
+type OutfitImageResult = {
+  imageUrl: string | null
+  source?: string
+  status?: string
+}
+
+type OutfitImageState = Record<GenderEdit, Record<string, OutfitImageResult | undefined>>
 type OutfitImageLoadingState = Record<GenderEdit, Record<string, boolean>>
 
 const STYLE_RETAILERS = [
@@ -85,6 +91,14 @@ function outfitImageKey(formula: StyleFormula, gender: GenderEdit) {
   return `${gender}:${formula.occasion}:${formula.formula}`
 }
 
+function audienceForGender(gender: GenderEdit) {
+  return gender === 'men' ? 'him' : 'her'
+}
+
+function fallbackImageForGender(gender: GenderEdit) {
+  return gender === 'men' ? '/looks/male-timothee-off-duty.jpg' : '/looks/female-carolyn-bessette-uniform.jpg'
+}
+
 export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
   const [genderEdit, setGenderEdit] = useState<GenderEdit>('women')
   const [styleData, setStyleData] = useState<StyleModeData | null>(null)
@@ -125,8 +139,13 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+              trendKeyword: trend.keyword,
+              keyword: trend.keyword,
+              context: 'trend-detail',
+              audience: audienceForGender(gender),
               formula: formula.formula,
               occasion: formula.occasion,
+              outfitTitle: `${trend.editorialName} ${formula.occasion}`,
               gender,
             }),
           })
@@ -136,7 +155,11 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
             ...current,
             [gender]: {
               ...current[gender],
-              [key]: data.imageUrl || null,
+              [key]: {
+                imageUrl: data.imageUrl || fallbackImageForGender(gender),
+                source: data.imageSource || 'fallback',
+                status: data.status || 'fallback',
+              },
             },
           }))
         } catch (error) {
@@ -145,7 +168,11 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
             ...current,
             [gender]: {
               ...current[gender],
-              [key]: null,
+              [key]: {
+                imageUrl: fallbackImageForGender(gender),
+                source: 'fallback',
+                status: 'fallback',
+              },
             },
           }))
         } finally {
@@ -212,8 +239,11 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
     if (styleData?.formulas?.women?.length) {
       loadOutfitImages(styleData.formulas.women, 'women')
     }
+    if (styleData?.formulas?.men?.length) {
+      loadOutfitImages(styleData.formulas.men, 'men')
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [styleData?.formulas?.women])
+  }, [styleData?.formulas?.women, styleData?.formulas?.men])
 
   useEffect(() => {
     if (genderEdit === 'men' && styleData?.formulas?.men?.length) {
@@ -363,51 +393,93 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
           <div className="style-formula-grid" style={{ display: 'grid', gap: '20px', marginTop: '28px' }}>
             {formulas.map((formula, index) => {
               const key = outfitImageKey(formula, genderEdit)
-              const imageUrl = outfitImages[genderEdit][key]
-              const isImageLoading = outfitImageLoading[genderEdit][key] || imageUrl === undefined
+              const imageResult = outfitImages[genderEdit][key]
+              const imageUrl = imageResult?.imageUrl
+              const isImageLoading = outfitImageLoading[genderEdit][key] || imageResult === undefined
               const imageRejected = imageUrl === null && !isImageLoading
+              const sourceLabel = imageResult?.source === 'ollama' ? 'Generated for this trend' : imageResult?.source ? imageResult.source.replace('_', ' ') : ''
+              const preparingLabel = genderEdit === 'men' ? 'Preparing his edit' : 'Preparing her edit'
 
               return (
                 <div key={`${formula.occasion}-${index}`} style={{ borderRadius: '2px', overflow: 'hidden' }}>
-                  {(isImageLoading || imageUrl || imageRejected) && (
-                    <div style={{ width: '100%', height: '480px', overflow: 'hidden', borderRadius: '2px 2px 0 0', backgroundColor: '#F3EEE7' }}>
-                      {imageUrl ? (
-                        <img
-                          src={imageUrl}
-                          alt={`${formula.occasion} ${genderEdit} outfit`}
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'contain',
-                            objectPosition: 'center center',
-                            opacity: 1,
-                            transition: 'opacity 0.4s ease',
-                          }}
-                        />
-                      ) : imageRejected ? (
+                  <div style={{ width: '100%', height: '480px', overflow: 'hidden', borderRadius: '2px 2px 0 0', backgroundColor: '#F3EEE7', position: 'relative' }}>
+                    {imageUrl ? (
+                      <img
+                        src={imageUrl}
+                        alt={`${formula.occasion} ${genderEdit} outfit`}
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'contain',
+                          objectPosition: 'center center',
+                          opacity: 1,
+                          transition: 'opacity 0.4s ease',
+                        }}
+                      />
+                    ) : imageRejected ? (
+                      <div
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor: '#EFE8DE',
+                          color: '#C4B4A6',
+                          fontFamily: 'var(--font-dm-sans)',
+                          fontSize: '8px',
+                          fontWeight: 200,
+                          letterSpacing: '3px',
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        Image fallback unavailable
+                      </div>
+                    ) : (
+                      <div style={{ width: '100%', height: '100%', backgroundColor: '#E8E0D4', animation: 'stylePulse 1.6s infinite' }} />
+                    )}
+
+                    {(isImageLoading || sourceLabel) && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          left: '12px',
+                          top: '12px',
+                          backgroundColor: 'rgba(250,247,244,0.9)',
+                          color: '#8C6030',
+                          padding: '5px 8px',
+                          borderRadius: '2px',
+                          fontFamily: 'var(--font-dm-sans)',
+                          fontSize: '8px',
+                          fontWeight: 300,
+                          letterSpacing: '2px',
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        {isImageLoading ? preparingLabel : sourceLabel}
+                      </div>
+                    )}
+
+                    {isImageLoading && !imageUrl && (
                         <div
                           style={{
-                            width: '100%',
-                            height: '100%',
-                            display: 'flex',
+                            position: 'absolute',
+                            inset: 0,
                             alignItems: 'center',
-                            justifyContent: 'center',
-                            backgroundColor: '#EFE8DE',
-                            color: '#C4B4A6',
+                            color: '#8C7B6E',
+                            display: 'flex',
                             fontFamily: 'var(--font-dm-sans)',
-                            fontSize: '8px',
-                            fontWeight: 200,
+                            fontSize: '10px',
+                            fontWeight: 300,
+                            justifyContent: 'center',
                             letterSpacing: '3px',
                             textTransform: 'uppercase',
                           }}
                         >
-                          Image did not pass fit check
+                          {preparingLabel}
                         </div>
-                      ) : (
-                        <div style={{ width: '100%', height: '100%', backgroundColor: '#E8E0D4', animation: 'stylePulse 1.6s infinite' }} />
                       )}
-                    </div>
-                  )}
+                  </div>
 
                   <div style={{ backgroundColor: '#FAF7F4', padding: '20px 24px' }}>
                     <div style={{ fontFamily: 'var(--font-dm-sans)', fontSize: '8px', fontWeight: 200, color: '#B03A5B', letterSpacing: '3px', textTransform: 'uppercase' }}>

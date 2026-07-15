@@ -131,3 +131,5 @@ Then open:
 - No payments are included.
 - No social media scraping is included.
 - The frontend uses mock fallback data when Supabase env vars are absent.
+- Trend outfit images generated locally should be uploaded to Supabase Storage and saved as public URLs in `trend_outfit_assets.image_url`.
+- Use `TREND_OUTFIT_ASSET_BUCKET=trend-outfits` unless you need a different public bucket.
