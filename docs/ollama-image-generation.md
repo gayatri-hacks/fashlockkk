@@ -71,6 +71,7 @@ Useful flags:
 --limit 10
 --variant trend_hero | trend_women | trend_men | deep_dive | daily_edit | all
 --trend-id 123
+--keyword "loose"
 --formula "loose shirt + straight-leg jeans + loafers"
 --occasion WORK
 --gender women | men
@@ -82,6 +83,12 @@ For a deep-dive outfit card, enqueue the exact displayed formula. The lookup is 
 
 ```bash
 npm run images:enqueue -- --trend-id 123 --variant trend_women --gender women --occasion WORK --formula "loose shirt + straight-leg jeans + loafers"
+```
+
+For searched keywords that are not stored in `trend_keywords`, use `--keyword`. The app uses the same deterministic synthetic id for that search term:
+
+```bash
+npm run images:enqueue -- --keyword "loose" --variant trend_women --gender women --occasion WORK --formula "loose shirt + straight-leg jeans + loafers"
 ```
 
 ## Run the local worker

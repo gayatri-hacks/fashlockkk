@@ -1,6 +1,10 @@
 #!/usr/bin/env tsx
 import "./load-env";
-import { FASHION_IMAGE_VARIANTS, type FashionImageVariant } from "../lib/images/build-fashion-image-prompt";
+import {
+  FASHION_IMAGE_VARIANTS,
+  syntheticTrendIdForKeyword,
+  type FashionImageVariant,
+} from "../lib/images/build-fashion-image-prompt";
 import { enqueueTrendImageJob, loadTrendImageSeed } from "../lib/images/generated-fashion-images";
 import { getSupabaseClient } from "../lib/supabase";
 
@@ -8,6 +12,7 @@ type Options = {
   limit: number;
   variant: FashionImageVariant | "all";
   trendId?: number;
+  keyword?: string;
   formula?: string;
   occasion?: string;
   gender?: "women" | "men";
@@ -34,6 +39,9 @@ function parseArgs(argv: string[]): Options {
     } else if (arg === "--trend-id" && next) {
       options.trendId = Number(next);
       index += 1;
+    } else if (arg === "--keyword" && next) {
+      options.keyword = next;
+      index += 1;
     } else if (arg === "--formula" && next) {
       options.formula = next;
       index += 1;
@@ -59,6 +67,7 @@ function parseArgs(argv: string[]): Options {
 }
 
 async function loadTrendIds(options: Options) {
+  if (options.keyword) return [syntheticTrendIdForKeyword(options.keyword)];
   if (options.trendId) return [options.trendId];
 
   const supabase = getSupabaseClient();
@@ -95,7 +104,13 @@ async function main() {
   let skipped = 0;
 
   for (const trendId of trendIds) {
-    const trend = await loadTrendImageSeed(trendId);
+    const trend = options.keyword
+      ? {
+          id: trendId,
+          keyword: options.keyword,
+          editorialName: options.keyword,
+        }
+      : await loadTrendImageSeed(trendId);
     if (!trend) {
       console.warn(`Trend ${trendId} not found; skipped.`);
       skipped += variants.length;

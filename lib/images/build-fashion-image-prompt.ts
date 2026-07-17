@@ -24,6 +24,13 @@ export function normalizeImagePrompt(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
+export function syntheticTrendIdForKeyword(keyword: string) {
+  const normalized = normalizeImagePrompt(keyword.toLowerCase()) || "fashion trend";
+  const hash = createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+  const id = Number(BigInt(`0x${hash}`) % 9000000000000n) + 1000000000;
+  return -id;
+}
+
 function variantDirection(variant: FashionImageVariant) {
   if (variant === "trend_women") {
     return "Womenswear outfit, full body adult model, exact wearable styling, shoes visible, complete outfit visible from head to toe.";

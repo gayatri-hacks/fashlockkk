@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { unstable_cache } from 'next/cache'
 import { getSupabaseClient, logSupabaseFallback, supabaseCache, supabaseCacheTtl } from '@/lib/supabase'
 import { getGeneratedFashionImage } from '@/lib/images/generated-fashion-images'
+import { syntheticTrendIdForKeyword } from '@/lib/images/build-fashion-image-prompt'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 7200
@@ -224,8 +225,15 @@ async function buildGeminiTrend(keyword: string, gemini: any) {
     value: Math.min(100, Math.max(8, Math.round(seed + Math.sin(index / 3) * 10 + index * (base === 'RISING' ? 1.4 : -0.3)))),
   }))
 
+  const syntheticId = syntheticTrendIdForKeyword(keyword)
+  const generatedImage = await getGeneratedFashionImage({
+    entityType: 'trend',
+    entityId: syntheticId,
+    variant: 'trend_hero',
+  })
+
   return {
-    id: Date.now(),
+    id: syntheticId,
     keyword,
     editorialName: gemini?.editorialName || keyword,
     oneLiner: gemini?.story || `${keyword} is building a new kind of wardrobe energy.`,
@@ -238,7 +246,7 @@ async function buildGeminiTrend(keyword: string, gemini: any) {
     pexelsQueries,
     pexelsImages,
     pexelsImageUrl: pexelsImages[0] || null,
-    generatedImageUrl: null,
+    generatedImageUrl: generatedImage?.image_url || null,
     velocity: base,
     topMarkets: [
       { code: 'FR', market: 'France' },
