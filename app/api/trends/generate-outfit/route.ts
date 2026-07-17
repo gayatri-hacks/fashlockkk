@@ -18,7 +18,7 @@ const IMAGEN_MODEL = process.env.TREND_OUTFIT_IMAGE_MODEL || "imagen-4.0-generat
 type Gender = "women" | "men";
 
 type OutfitResponse = {
-  imageUrl: string;
+  imageUrl: string | null;
   imageSource: TrendOutfitAssetSource;
   assetId?: number | null;
   cached?: boolean;
@@ -30,6 +30,16 @@ function fallbackResponse(gender: Gender): OutfitResponse {
     imageUrl: gender === "men" ? "/looks/male-timothee-off-duty.jpg" : "/looks/female-carolyn-bessette-uniform.jpg",
     imageSource: "fallback",
     assetId: null,
+  };
+}
+
+function unavailableResponse(): OutfitResponse {
+  return {
+    imageUrl: null,
+    imageSource: "fallback",
+    assetId: null,
+    cached: false,
+    status: "fallback",
   };
 }
 
@@ -247,6 +257,16 @@ export async function POST(req: Request) {
         cached: false,
         status: "generated",
       } satisfies OutfitResponse);
+    }
+
+    if (assetContext === "trend-detail") {
+      console.info("Exact trend outfit generation unavailable; skipping broad fallback", {
+        trendKeyword,
+        assetContext,
+        audience,
+        outfitTitle,
+      });
+      return NextResponse.json(unavailableResponse());
     }
 
     const fallback = await resolveTrendOutfitFallback({

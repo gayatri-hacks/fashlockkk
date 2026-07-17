@@ -95,10 +95,6 @@ function audienceForGender(gender: GenderEdit) {
   return gender === 'men' ? 'him' : 'her'
 }
 
-function fallbackImageForGender(gender: GenderEdit) {
-  return gender === 'men' ? '/looks/male-timothee-off-duty.jpg' : '/looks/female-carolyn-bessette-uniform.jpg'
-}
-
 export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
   const [genderEdit, setGenderEdit] = useState<GenderEdit>('women')
   const [styleData, setStyleData] = useState<StyleModeData | null>(null)
@@ -156,7 +152,7 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
             [gender]: {
               ...current[gender],
               [key]: {
-                imageUrl: data.imageUrl || fallbackImageForGender(gender),
+                imageUrl: data.imageUrl || null,
                 source: data.imageSource || 'fallback',
                 status: data.status || 'fallback',
               },
@@ -169,7 +165,7 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
             [gender]: {
               ...current[gender],
               [key]: {
-                imageUrl: fallbackImageForGender(gender),
+                imageUrl: null,
                 source: 'fallback',
                 status: 'fallback',
               },
@@ -397,7 +393,12 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
               const imageUrl = imageResult?.imageUrl
               const isImageLoading = outfitImageLoading[genderEdit][key] || imageResult === undefined
               const imageRejected = imageUrl === null && !isImageLoading
-              const sourceLabel = imageResult?.source === 'ollama' ? 'Generated for this trend' : imageResult?.source ? imageResult.source.replace('_', ' ') : ''
+              const sourceLabel =
+                imageResult?.source === 'ollama' || imageResult?.source === 'gemini'
+                  ? 'Generated for this outfit'
+                  : imageResult?.source
+                    ? imageResult.source.replace('_', ' ')
+                    : ''
               const preparingLabel = genderEdit === 'men' ? 'Preparing his edit' : 'Preparing her edit'
 
               return (
