@@ -5,6 +5,7 @@ import { getSupabaseClient } from "@/lib/supabase";
 
 export type TrendOutfitAssetSource =
   | "ollama"
+  | "gemini"
   | "pexels"
   | "product_catalog"
   | "look_library"
@@ -91,6 +92,14 @@ function scoreTextMatch(haystack: string, needle: string) {
   if (haystack === needle) return 12;
   if (haystack.includes(needle)) return 6;
   return 0;
+}
+
+function assetFormulaMatchScore(asset: TrendOutfitAsset, normalizedFormula: string) {
+  if (!normalizedFormula) return 0;
+  return (
+    scoreTextMatch(normalizeTrendOutfitFormula(asset.outfit_formula), normalizedFormula) +
+    scoreTextMatch(normalizeTrendOutfitFormula(asset.outfit_title), normalizedFormula)
+  );
 }
 
 function buildProductTerms(keyword: string, outfitFormula: string) {
@@ -401,15 +410,10 @@ export async function findApprovedTrendOutfitAsset(options: {
   const assets = (data ?? []) as TrendOutfitAsset[];
 
   return (
-    assets.sort((a, b) => {
-      const aScore =
-        scoreTextMatch(normalizeTrendOutfitFormula(a.outfit_formula), normalizedFormula) +
-        scoreTextMatch(a.outfit_title.toLowerCase(), normalizedFormula);
-      const bScore =
-        scoreTextMatch(normalizeTrendOutfitFormula(b.outfit_formula), normalizedFormula) +
-        scoreTextMatch(b.outfit_title.toLowerCase(), normalizedFormula);
-      return bScore - aScore || b.id - a.id;
-    })[0] || null
+    assets
+      .map((asset) => ({ asset, score: assetFormulaMatchScore(asset, normalizedFormula) }))
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score || b.asset.id - a.asset.id)[0]?.asset || null
   );
 }
 
@@ -442,21 +446,20 @@ export async function findReusableTrendOutfitAsset(options: {
 
   const assets = (data ?? []) as TrendOutfitAsset[];
   return (
-    assets.sort((a, b) => {
-      const aFormula = normalizeTrendOutfitFormula(a.outfit_formula);
-      const bFormula = normalizeTrendOutfitFormula(b.outfit_formula);
-      const aScore =
-        (a.status === "approved" ? 100 : 0) +
-        (a.image_source === "ollama" ? 20 : 0) +
-        scoreTextMatch(aFormula, normalizedFormula) +
-        scoreTextMatch(a.outfit_title.toLowerCase(), normalizedFormula);
-      const bScore =
-        (b.status === "approved" ? 100 : 0) +
-        (b.image_source === "ollama" ? 20 : 0) +
-        scoreTextMatch(bFormula, normalizedFormula) +
-        scoreTextMatch(b.outfit_title.toLowerCase(), normalizedFormula);
-      return bScore - aScore || b.id - a.id;
-    })[0] || null
+    assets
+      .map((asset) => {
+        const matchScore = assetFormulaMatchScore(asset, normalizedFormula);
+        return {
+          asset,
+          matchScore,
+          score:
+            (asset.status === "approved" ? 100 : 0) +
+            (asset.image_source === "ollama" ? 20 : 0) +
+            matchScore,
+        };
+      })
+      .filter(({ matchScore }) => matchScore > 0)
+      .sort((a, b) => b.score - a.score || b.asset.id - a.asset.id)[0]?.asset || null
   );
 }
 
@@ -823,15 +826,26 @@ async function resolvePexelsImage({
 
 export async function resolveTrendOutfitFallback(options: ResolveFallbackOptions): Promise<ResolvedImage> {
   const gender = options.gender === "men" ? "men" : "women";
+  const assetContext = options.assetContext || "trend-detail";
+
+  if (assetContext === "trend-detail") {
+    const productImage = await resolveProductImage(options);
+    if (productImage) return productImage;
+
+    const pexelsImage = await resolvePexelsImage(options);
+    if (pexelsImage) return pexelsImage;
+  }
 
   const lookLibraryImage = await resolveLookLibraryImage({ ...options, gender });
   if (lookLibraryImage) return lookLibraryImage;
 
-  const productImage = await resolveProductImage(options);
-  if (productImage) return productImage;
+  if (assetContext !== "trend-detail") {
+    const productImage = await resolveProductImage(options);
+    if (productImage) return productImage;
 
-  const pexelsImage = await resolvePexelsImage(options);
-  if (pexelsImage) return pexelsImage;
+    const pexelsImage = await resolvePexelsImage(options);
+    if (pexelsImage) return pexelsImage;
+  }
 
   return {
     imageUrl: DEFAULT_FALLBACK_IMAGE[gender],

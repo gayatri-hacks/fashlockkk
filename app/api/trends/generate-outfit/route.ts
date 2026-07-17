@@ -13,6 +13,8 @@ export const dynamic = "force-dynamic";
 export const revalidate = 86400;
 export const maxDuration = 180;
 
+const IMAGEN_MODEL = process.env.TREND_OUTFIT_IMAGE_MODEL || "imagen-4.0-generate-001";
+
 type Gender = "women" | "men";
 
 type OutfitResponse = {
@@ -29,6 +31,85 @@ function fallbackResponse(gender: Gender): OutfitResponse {
     imageSource: "fallback",
     assetId: null,
   };
+}
+
+async function generateExactOutfitImage({
+  trendKeyword,
+  outfitFormula,
+  outfitTitle,
+  occasion,
+  gender,
+  audience,
+}: {
+  trendKeyword: string;
+  outfitFormula: string;
+  outfitTitle: string;
+  occasion: string;
+  gender: Gender;
+  audience: string;
+}) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key || !outfitFormula.trim()) return null;
+
+  const modelDescription = gender === "men" ? "one adult male fashion model" : "one adult female fashion model";
+  const audienceDirection =
+    audience === "him" || gender === "men"
+      ? "Make this a menswear outfit. Do not use womenswear pieces unless they are explicitly named."
+      : "Make this a womenswear outfit. Do not use menswear pieces unless they are explicitly named.";
+  const prompt = [
+    "Photorealistic fashion ecommerce lookbook photograph.",
+    "Generate a NEW image for this exact outfit formula, not a generic trend image.",
+    audienceDirection,
+    `Subject: ${modelDescription}, full body visible from head to toe.`,
+    "Shoes and feet must be visible. Camera far enough back. No cropping.",
+    "Clean warm ivory studio background. Modern premium styling. Natural pose.",
+    `Trend: ${trendKeyword || "fashion trend"}.`,
+    `Outfit title: ${outfitTitle}.`,
+    occasion ? `Occasion: ${occasion}.` : "",
+    `Exact outfit formula to show: ${outfitFormula}.`,
+    "Every garment in the formula must be visibly represented.",
+    "No text, no logos, no watermark, no collage, no props, no extra people.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  try {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${IMAGEN_MODEL}:predict?key=${key}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instances: [{ prompt }],
+        parameters: {
+          sampleCount: 1,
+          aspectRatio: "3:4",
+          personGeneration: "allow_adult",
+        },
+      }),
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      console.error("Exact trend outfit image failed:", IMAGEN_MODEL, response.status, await response.text());
+      return null;
+    }
+
+    const payload = await response.json();
+    const imageBase64 =
+      payload?.predictions?.[0]?.bytesBase64Encoded ||
+      payload?.predictions?.[0]?.bytesBase64 ||
+      payload?.predictions?.[0]?.image?.bytesBase64Encoded;
+
+    if (!imageBase64) {
+      console.error("Exact trend outfit image missing bytes:", IMAGEN_MODEL);
+      return null;
+    }
+
+    const mimeType = payload?.predictions?.[0]?.mimeType || "image/png";
+    return `data:${mimeType};base64,${imageBase64}`;
+  } catch (error) {
+    console.error("Exact trend outfit image skipped:", error instanceof Error ? error.message : String(error));
+    return null;
+  }
 }
 
 export async function POST(req: Request) {
@@ -115,6 +196,31 @@ export async function POST(req: Request) {
         assetId: reusableAsset.id,
         cached: true,
         status: "cached",
+      } satisfies OutfitResponse);
+    }
+
+    const exactGeneratedImage = await generateExactOutfitImage({
+      trendKeyword: trendKeyword || formula,
+      outfitFormula,
+      outfitTitle,
+      occasion,
+      gender,
+      audience,
+    });
+
+    if (exactGeneratedImage) {
+      console.info("Exact trend outfit image generated", {
+        trendKeyword,
+        assetContext,
+        audience,
+        outfitTitle,
+      });
+      return NextResponse.json({
+        imageUrl: exactGeneratedImage,
+        imageSource: "gemini",
+        assetId: null,
+        cached: false,
+        status: "generated",
       } satisfies OutfitResponse);
     }
 
