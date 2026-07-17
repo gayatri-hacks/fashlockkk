@@ -13,6 +13,9 @@ export type FashionImagePromptInput = {
   editorialName?: string | null;
   oneLiner?: string | null;
   howToWear?: string[] | null;
+  outfitFormula?: string | null;
+  outfitOccasion?: string | null;
+  gender?: "women" | "men" | null;
   model: string;
   imageSize: string;
 };
@@ -23,13 +26,13 @@ export function normalizeImagePrompt(value: string) {
 
 function variantDirection(variant: FashionImageVariant) {
   if (variant === "trend_women") {
-    return "Womenswear outfit, full body adult model, exact wearable styling, shoes visible.";
+    return "Womenswear outfit, full body adult model, exact wearable styling, shoes visible, complete outfit visible from head to toe.";
   }
   if (variant === "trend_men") {
-    return "Menswear outfit, full body adult model, exact wearable styling, shoes visible.";
+    return "Menswear outfit, full body adult model, exact wearable styling, shoes visible, complete outfit visible from head to toe.";
   }
   if (variant === "trend_hero") {
-    return "Editorial hero look, full body adult fashion model, clear trend signal, shoes visible.";
+    return "Editorial hero look, full body adult fashion model, clear trend signal, complete outfit visible from head to toe, extra margin above head and below shoes.";
   }
   if (variant === "daily_edit") {
     return "Daytime wearable outfit, full body adult fashion model, practical styling, shoes visible.";
@@ -40,16 +43,28 @@ function variantDirection(variant: FashionImageVariant) {
 export function buildFashionImagePrompt(input: FashionImagePromptInput) {
   const name = input.editorialName?.trim() || input.keyword;
   const stylingNotes = (input.howToWear || []).filter(Boolean).slice(0, 4).join("; ");
+  const outfitFormula = input.outfitFormula?.trim();
+  const outfitOccasion = input.outfitOccasion?.trim();
+  const genderDirection =
+    input.gender === "men"
+      ? "Use menswear proportions and styling."
+      : input.gender === "women"
+        ? "Use womenswear proportions and styling."
+        : "";
 
   return [
     "Photorealistic premium fashion ecommerce lookbook image.",
     variantDirection(input.variant),
+    genderDirection,
     `Trend keyword: ${input.keyword}.`,
     `Editorial trend name: ${name}.`,
+    outfitOccasion ? `Occasion: ${outfitOccasion}.` : "",
+    outfitFormula ? `Exact outfit formula to show: ${outfitFormula}. Every listed garment must be visible.` : "",
     input.oneLiner ? `Trend context: ${input.oneLiner}.` : "",
     stylingNotes ? `Styling direction: ${stylingNotes}.` : "",
-    "Clean warm ivory studio background, natural pose, modern Indian/global fashion styling.",
-    "Show the complete outfit from head to toe with fabric texture and silhouette visible.",
+    "Clean warm ivory studio background, natural pose, modern Indian/global fashion styling, no props.",
+    "Full body framing: head, torso, legs, shoes, and feet must all be visible inside the image.",
+    "Camera far enough back for the whole outfit. Do not crop the head, hem, shoes, or feet.",
     "No text, no logos, no watermark, no collage, no extra people, no cropped feet.",
   ]
     .filter(Boolean)

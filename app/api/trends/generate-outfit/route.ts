@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { getGeneratedFashionImage } from "@/lib/images/generated-fashion-images";
+import {
+  DEFAULT_OLLAMA_IMAGE_MODEL,
+  DEFAULT_OLLAMA_IMAGE_SIZE,
+  buildTrendImageJobPayload,
+  getGeneratedFashionImage,
+} from "@/lib/images/generated-fashion-images";
 import {
   buildTrendCardOutfitFormula,
   resolveTrendOutfitFallback,
@@ -75,12 +80,31 @@ export async function POST(req: Request) {
             : "her";
     const trendId = Number(body.trendId || body.entityId || body.id || 0);
     const variant = variantForRequest({ assetContext, gender });
+    const outfitFormula = formula || buildTrendCardOutfitFormula(trendKeyword || outfitTitle, audience);
 
     if (Number.isFinite(trendId) && trendId > 0) {
+      const exactPayload =
+        assetContext === "trend-detail" && formula
+          ? buildTrendImageJobPayload({
+              trend: {
+                id: trendId,
+                keyword: trendKeyword || formula,
+                editorialName: trendKeyword || outfitTitle,
+              },
+              variant,
+              outfitFormula,
+              outfitOccasion: occasion || outfitTitle,
+              gender,
+              model: DEFAULT_OLLAMA_IMAGE_MODEL,
+              imageSize: DEFAULT_OLLAMA_IMAGE_SIZE,
+            })
+          : null;
+
       const generatedImage = await getGeneratedFashionImage({
         entityType: "trend",
         entityId: trendId,
         variant,
+        promptHash: exactPayload?.prompt_hash,
       });
 
       if (generatedImage?.image_url) {
@@ -98,7 +122,6 @@ export async function POST(req: Request) {
       return NextResponse.json(unavailableResponse());
     }
 
-    const outfitFormula = formula || buildTrendCardOutfitFormula(trendKeyword || outfitTitle, audience);
     const fallback = await resolveTrendOutfitFallback({
       trendKeyword: trendKeyword || formula,
       outfitFormula,

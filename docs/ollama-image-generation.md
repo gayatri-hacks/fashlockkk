@@ -71,8 +71,17 @@ Useful flags:
 --limit 10
 --variant trend_hero | trend_women | trend_men | deep_dive | daily_edit | all
 --trend-id 123
+--formula "loose shirt + straight-leg jeans + loafers"
+--occasion WORK
+--gender women | men
 --top-only
 --force
+```
+
+For a deep-dive outfit card, enqueue the exact displayed formula. The lookup is formula-specific, so three outfit cards can have three different images:
+
+```bash
+npm run images:enqueue -- --trend-id 123 --variant trend_women --gender women --occasion WORK --formula "loose shirt + straight-leg jeans + loafers"
 ```
 
 ## Run the local worker

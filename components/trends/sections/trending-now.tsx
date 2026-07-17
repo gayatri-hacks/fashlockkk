@@ -16,7 +16,6 @@ export default function TrendingNow({ trends, loading, onTrendClick }: TrendingN
   const imageStyle = {
     width: '100%',
     height: '100%',
-    objectFit: 'cover' as const,
     objectPosition: 'center 35%',
     filter: 'saturate(0.88) contrast(0.96) brightness(1.06)',
     transition: 'transform 0.5s ease, filter 0.3s ease',
@@ -79,6 +78,7 @@ export default function TrendingNow({ trends, loading, onTrendClick }: TrendingN
 
   const renderTrendImage = (trend: TrendData, height: string, overlay = false) => {
     const imageUrl = trend.generatedImageUrl || trend.pexelsImageUrl
+    const isGenerated = Boolean(trend.generatedImageUrl)
     const sourceLabel = trend.generatedImageUrl ? 'Generated for this trend' : ''
 
     return (
@@ -87,7 +87,11 @@ export default function TrendingNow({ trends, loading, onTrendClick }: TrendingN
           <img
             src={imageUrl}
             alt={`${trend.editorialName} outfit`}
-            style={imageStyle}
+            style={{
+              ...imageStyle,
+              objectFit: isGenerated ? 'contain' : 'cover',
+              objectPosition: isGenerated ? 'center center' : 'center 35%',
+            }}
           />
         ) : (
           <div

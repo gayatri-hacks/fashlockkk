@@ -11,6 +11,9 @@ const postSchema = z.object({
   entityType: z.literal("trend"),
   entityId: z.coerce.number().int().positive(),
   variant: z.enum(FASHION_IMAGE_VARIANTS),
+  formula: z.string().trim().optional(),
+  occasion: z.string().trim().optional(),
+  gender: z.enum(["women", "men"]).optional(),
   force: z.boolean().optional().default(false),
   priority: z.coerce.number().int().optional().default(0),
 });
@@ -49,6 +52,9 @@ export async function POST(req: Request) {
     const result = await enqueueTrendImageJob({
       trend,
       variant: body.variant as FashionImageVariant,
+      outfitFormula: body.formula,
+      outfitOccasion: body.occasion,
+      gender: body.gender,
       force: body.force,
       priority: body.priority,
     });

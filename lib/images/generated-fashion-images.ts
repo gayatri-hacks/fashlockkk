@@ -35,23 +35,28 @@ export async function getGeneratedFashionImage({
   entityType,
   entityId,
   variant,
+  promptHash,
 }: {
   entityType: FashionImageEntityType;
   entityId: number;
   variant: FashionImageVariant;
+  promptHash?: string | null;
 }) {
   const supabase = getSupabaseClient();
   if (!supabase) return null;
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("generated_fashion_images")
     .select("*")
     .eq("entity_type", entityType)
     .eq("entity_id", entityId)
     .eq("variant", variant)
     .order("completed_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+
+  if (promptHash) query = query.eq("prompt_hash", promptHash);
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     console.warn("Generated fashion image lookup skipped:", error.message);
@@ -110,11 +115,17 @@ export async function loadTrendImageSeed(entityId: number): Promise<TrendImageSe
 export function buildTrendImageJobPayload({
   trend,
   variant,
+  outfitFormula,
+  outfitOccasion,
+  gender,
   model = DEFAULT_OLLAMA_IMAGE_MODEL,
   imageSize = DEFAULT_OLLAMA_IMAGE_SIZE,
 }: {
   trend: TrendImageSeed;
   variant: FashionImageVariant;
+  outfitFormula?: string | null;
+  outfitOccasion?: string | null;
+  gender?: "women" | "men" | null;
   model?: string;
   imageSize?: string;
 }) {
@@ -126,6 +137,9 @@ export function buildTrendImageJobPayload({
     editorialName: trend.editorialName,
     oneLiner: trend.oneLiner,
     howToWear: trend.howToWear,
+    outfitFormula,
+    outfitOccasion,
+    gender,
     model,
     imageSize,
   });
@@ -143,6 +157,9 @@ export function buildTrendImageJobPayload({
     metadata: {
       keyword: trend.keyword,
       editorialName: trend.editorialName || trend.keyword,
+      outfitFormula: outfitFormula || null,
+      outfitOccasion: outfitOccasion || null,
+      gender: gender || null,
     },
   };
 }
@@ -150,6 +167,9 @@ export function buildTrendImageJobPayload({
 export async function enqueueTrendImageJob({
   trend,
   variant,
+  outfitFormula,
+  outfitOccasion,
+  gender,
   force = false,
   priority = 0,
   model = DEFAULT_OLLAMA_IMAGE_MODEL,
@@ -157,6 +177,9 @@ export async function enqueueTrendImageJob({
 }: {
   trend: TrendImageSeed;
   variant: FashionImageVariant;
+  outfitFormula?: string | null;
+  outfitOccasion?: string | null;
+  gender?: "women" | "men" | null;
   force?: boolean;
   priority?: number;
   model?: string;
@@ -165,10 +188,15 @@ export async function enqueueTrendImageJob({
   const supabase = getSupabaseClient();
   if (!supabase) throw new Error("Supabase service credentials are required");
 
-  const payload = buildTrendImageJobPayload({ trend, variant, model, imageSize });
+  const payload = buildTrendImageJobPayload({ trend, variant, outfitFormula, outfitOccasion, gender, model, imageSize });
 
   if (!force) {
-    const existingImage = await getGeneratedFashionImage({ entityType: "trend", entityId: trend.id, variant });
+    const existingImage = await getGeneratedFashionImage({
+      entityType: "trend",
+      entityId: trend.id,
+      variant,
+      promptHash: payload.prompt_hash,
+    });
     if (existingImage?.prompt_hash === payload.prompt_hash) {
       return { status: "completed" as const, image: existingImage, job: null, payload };
     }

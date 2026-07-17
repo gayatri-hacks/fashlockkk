@@ -8,6 +8,9 @@ type Options = {
   limit: number;
   variant: FashionImageVariant | "all";
   trendId?: number;
+  formula?: string;
+  occasion?: string;
+  gender?: "women" | "men";
   force: boolean;
   topOnly: boolean;
 };
@@ -31,6 +34,16 @@ function parseArgs(argv: string[]): Options {
     } else if (arg === "--trend-id" && next) {
       options.trendId = Number(next);
       index += 1;
+    } else if (arg === "--formula" && next) {
+      options.formula = next;
+      index += 1;
+    } else if (arg === "--occasion" && next) {
+      options.occasion = next;
+      index += 1;
+    } else if (arg === "--gender" && next) {
+      if (next !== "women" && next !== "men") throw new Error(`Unknown gender: ${next}`);
+      options.gender = next;
+      index += 1;
     } else if (arg === "--force") {
       options.force = true;
     } else if (arg === "--top-only") {
@@ -39,6 +52,9 @@ function parseArgs(argv: string[]): Options {
   }
 
   if (!Number.isFinite(options.limit) || options.limit < 1) options.limit = 5;
+  if (options.formula && !options.gender) {
+    throw new Error("--gender women|men is required when --formula is provided");
+  }
   return options;
 }
 
@@ -90,6 +106,9 @@ async function main() {
       const result = await enqueueTrendImageJob({
         trend,
         variant: variant as FashionImageVariant,
+        outfitFormula: options.formula,
+        outfitOccasion: options.occasion,
+        gender: options.gender,
         force: options.force,
         priority: options.topOnly ? 10 : 0,
       });
