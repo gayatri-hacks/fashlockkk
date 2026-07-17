@@ -3,6 +3,7 @@ import { getSupabaseClient, logSupabaseFallback, supabaseCache, supabaseCacheTtl
 import { getAuthenticatedUserId } from '@/lib/supabase-auth'
 import { getLatestTrendMonth, getTopTrendingKeywords, trendVelocityLabel } from '@/lib/trend-velocity'
 import { getGeneratedFashionImagesForTrends } from '@/lib/images/generated-fashion-images'
+import { syntheticTrendIdForKeyword } from '@/lib/images/build-fashion-image-prompt'
 
 export const dynamic = 'force-dynamic'
 const GEMINI_MODEL = 'gemini-2.5-flash'
@@ -60,17 +61,31 @@ function fallbackOverviewData() {
   return { trendingTrends, cycleTrends }
 }
 
-async function attachGeneratedTrendImages<T extends { id: number }>(trends: T[]) {
+async function attachGeneratedTrendImages<T extends { id: number; keyword?: string }>(trends: T[]) {
   if (!trends.length) return trends
 
+  const syntheticIdsByTrendId = new Map<number, number>()
+  const ids = trends.flatMap((trend) => {
+    const entityIds = [trend.id]
+    if (trend.keyword) {
+      const syntheticId = syntheticTrendIdForKeyword(trend.keyword)
+      syntheticIdsByTrendId.set(trend.id, syntheticId)
+      entityIds.push(syntheticId)
+    }
+    return entityIds
+  })
+
   const generatedImages = await getGeneratedFashionImagesForTrends(
-    trends.map((trend) => trend.id),
+    ids,
     ['trend_hero']
   )
 
   return trends.map((trend) => ({
     ...trend,
-    generatedImageUrl: generatedImages.get(`${trend.id}:trend_hero`)?.image_url || null,
+    generatedImageUrl:
+      generatedImages.get(`${trend.id}:trend_hero`)?.image_url ||
+      generatedImages.get(`${syntheticIdsByTrendId.get(trend.id)}:trend_hero`)?.image_url ||
+      null,
   }))
 }
 

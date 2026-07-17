@@ -10,6 +10,7 @@ import {
   resolveTrendOutfitFallback,
   type TrendOutfitAssetSource,
 } from "@/lib/trend-outfit-assets";
+import { syntheticTrendIdForKeyword } from "@/lib/images/build-fashion-image-prompt";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,12 +83,21 @@ export async function POST(req: Request) {
     const variant = variantForRequest({ assetContext, gender });
     const outfitFormula = formula || buildTrendCardOutfitFormula(trendKeyword || outfitTitle, audience);
 
-    if (Number.isFinite(trendId) && trendId > 0) {
+    const candidateTrendIds = Array.from(
+      new Set(
+        [
+          Number.isFinite(trendId) && trendId !== 0 ? trendId : null,
+          trendKeyword ? syntheticTrendIdForKeyword(trendKeyword) : null,
+        ].filter((id): id is number => typeof id === "number"),
+      ),
+    );
+
+    for (const candidateTrendId of candidateTrendIds) {
       const exactPayload =
         assetContext === "trend-detail" && formula
           ? buildTrendImageJobPayload({
               trend: {
-                id: trendId,
+                id: candidateTrendId,
                 keyword: trendKeyword || formula,
                 editorialName: trendKeyword || outfitTitle,
               },
@@ -102,7 +112,7 @@ export async function POST(req: Request) {
 
       const generatedImage = await getGeneratedFashionImage({
         entityType: "trend",
-        entityId: trendId,
+        entityId: candidateTrendId,
         variant,
         promptHash: exactPayload?.prompt_hash,
       });
