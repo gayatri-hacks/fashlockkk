@@ -1,0 +1,208 @@
+import { getSupabaseClient } from "@/lib/supabase";
+import {
+  buildFashionImagePrompt,
+  createFashionPromptHash,
+  storagePathForFashionImage,
+  type FashionImageEntityType,
+  type FashionImageVariant,
+} from "@/lib/images/build-fashion-image-prompt";
+
+export const DEFAULT_OLLAMA_IMAGE_MODEL = process.env.OLLAMA_IMAGE_MODEL || "x/flux2-klein:4b";
+export const DEFAULT_OLLAMA_IMAGE_SIZE = process.env.OLLAMA_IMAGE_SIZE || "1024x1024";
+
+export type TrendImageSeed = {
+  id: number;
+  keyword: string;
+  editorialName?: string | null;
+  oneLiner?: string | null;
+  howToWear?: string[] | null;
+};
+
+export type GeneratedFashionImage = {
+  id: string;
+  entity_type: FashionImageEntityType;
+  entity_id: number;
+  variant: FashionImageVariant;
+  prompt_hash: string;
+  model: string;
+  image_size: string;
+  storage_path: string;
+  image_url: string;
+  metadata?: Record<string, unknown> | null;
+};
+
+export async function getGeneratedFashionImage({
+  entityType,
+  entityId,
+  variant,
+}: {
+  entityType: FashionImageEntityType;
+  entityId: number;
+  variant: FashionImageVariant;
+}) {
+  const supabase = getSupabaseClient();
+  if (!supabase) return null;
+
+  const { data, error } = await supabase
+    .from("generated_fashion_images")
+    .select("*")
+    .eq("entity_type", entityType)
+    .eq("entity_id", entityId)
+    .eq("variant", variant)
+    .order("completed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.warn("Generated fashion image lookup skipped:", error.message);
+    return null;
+  }
+
+  return (data || null) as GeneratedFashionImage | null;
+}
+
+export async function getGeneratedFashionImagesForTrends(entityIds: number[], variants: FashionImageVariant[]) {
+  const supabase = getSupabaseClient();
+  const ids = Array.from(new Set(entityIds.filter(Boolean)));
+  if (!supabase || !ids.length || !variants.length) return new Map<string, GeneratedFashionImage>();
+
+  const { data, error } = await supabase
+    .from("generated_fashion_images")
+    .select("*")
+    .eq("entity_type", "trend")
+    .in("entity_id", ids)
+    .in("variant", variants)
+    .order("completed_at", { ascending: false });
+
+  if (error) {
+    console.warn("Generated fashion images bulk lookup skipped:", error.message);
+    return new Map<string, GeneratedFashionImage>();
+  }
+
+  const images = new Map<string, GeneratedFashionImage>();
+  for (const row of data || []) {
+    const key = `${row.entity_id}:${row.variant}`;
+    if (!images.has(key)) images.set(key, row as GeneratedFashionImage);
+  }
+  return images;
+}
+
+export async function loadTrendImageSeed(entityId: number): Promise<TrendImageSeed | null> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return null;
+
+  const { data, error } = await supabase
+    .from("trend_keywords")
+    .select("id, keyword")
+    .eq("id", entityId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) return null;
+
+  return {
+    id: Number(data.id),
+    keyword: String(data.keyword),
+    editorialName: String(data.keyword),
+  };
+}
+
+export function buildTrendImageJobPayload({
+  trend,
+  variant,
+  model = DEFAULT_OLLAMA_IMAGE_MODEL,
+  imageSize = DEFAULT_OLLAMA_IMAGE_SIZE,
+}: {
+  trend: TrendImageSeed;
+  variant: FashionImageVariant;
+  model?: string;
+  imageSize?: string;
+}) {
+  const prompt = buildFashionImagePrompt({
+    entityType: "trend",
+    entityId: trend.id,
+    variant,
+    keyword: trend.keyword,
+    editorialName: trend.editorialName,
+    oneLiner: trend.oneLiner,
+    howToWear: trend.howToWear,
+    model,
+    imageSize,
+  });
+  const promptHash = createFashionPromptHash({ prompt, model, imageSize, variant });
+
+  return {
+    entity_type: "trend" as const,
+    entity_id: trend.id,
+    variant,
+    prompt,
+    prompt_hash: promptHash,
+    model,
+    image_size: imageSize,
+    storage_path: storagePathForFashionImage({ entityId: trend.id, variant, promptHash }),
+    metadata: {
+      keyword: trend.keyword,
+      editorialName: trend.editorialName || trend.keyword,
+    },
+  };
+}
+
+export async function enqueueTrendImageJob({
+  trend,
+  variant,
+  force = false,
+  priority = 0,
+  model = DEFAULT_OLLAMA_IMAGE_MODEL,
+  imageSize = DEFAULT_OLLAMA_IMAGE_SIZE,
+}: {
+  trend: TrendImageSeed;
+  variant: FashionImageVariant;
+  force?: boolean;
+  priority?: number;
+  model?: string;
+  imageSize?: string;
+}) {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error("Supabase service credentials are required");
+
+  const payload = buildTrendImageJobPayload({ trend, variant, model, imageSize });
+
+  if (!force) {
+    const existingImage = await getGeneratedFashionImage({ entityType: "trend", entityId: trend.id, variant });
+    if (existingImage?.prompt_hash === payload.prompt_hash) {
+      return { status: "completed" as const, image: existingImage, job: null, payload };
+    }
+
+    const { data: existingJob, error: existingJobError } = await supabase
+      .from("image_generation_jobs")
+      .select("*")
+      .eq("entity_type", "trend")
+      .eq("entity_id", trend.id)
+      .eq("variant", variant)
+      .eq("prompt_hash", payload.prompt_hash)
+      .maybeSingle();
+
+    if (existingJobError) throw existingJobError;
+    if (existingJob) return { status: "existing_job" as const, image: null, job: existingJob, payload };
+  }
+
+  const { data: job, error } = await supabase
+    .from("image_generation_jobs")
+    .upsert(
+      {
+        ...payload,
+        status: "pending",
+        priority,
+        attempts: 0,
+        error_message: null,
+        locked_at: null,
+        locked_by: null,
+      },
+      { onConflict: "entity_type,entity_id,variant,prompt_hash" },
+    )
+    .select("*")
+    .single();
+
+  if (error) throw error;
+  return { status: "queued" as const, image: null, job, payload };
+}

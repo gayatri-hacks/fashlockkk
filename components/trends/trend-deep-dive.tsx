@@ -136,6 +136,7 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               trendKeyword: trend.keyword,
+              trendId: trend.id,
               keyword: trend.keyword,
               context: 'trend-detail',
               audience: audienceForGender(gender),

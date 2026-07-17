@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseClient, logSupabaseFallback, supabaseCache, supabaseCacheTtl } from '@/lib/supabase'
 import { getAuthenticatedUserId } from '@/lib/supabase-auth'
 import { getLatestTrendMonth, getTopTrendingKeywords, trendVelocityLabel } from '@/lib/trend-velocity'
+import { getGeneratedFashionImagesForTrends } from '@/lib/images/generated-fashion-images'
 
 export const dynamic = 'force-dynamic'
 const GEMINI_MODEL = 'gemini-2.5-flash'
@@ -57,6 +58,20 @@ function fallbackOverviewData() {
   ]
 
   return { trendingTrends, cycleTrends }
+}
+
+async function attachGeneratedTrendImages<T extends { id: number }>(trends: T[]) {
+  if (!trends.length) return trends
+
+  const generatedImages = await getGeneratedFashionImagesForTrends(
+    trends.map((trend) => trend.id),
+    ['trend_hero']
+  )
+
+  return trends.map((trend) => ({
+    ...trend,
+    generatedImageUrl: generatedImages.get(`${trend.id}:trend_hero`)?.image_url || null,
+  }))
 }
 
 async function callGemini(prompt: string): Promise<string> {
@@ -375,11 +390,17 @@ export async function GET() {
       }
     })
 
+    const enrichedData = {
+      ...data,
+      trendingTrends: await attachGeneratedTrendImages(data.trendingTrends || []),
+      cycleTrends: await attachGeneratedTrendImages(data.cycleTrends || []),
+    }
+
     const profile = await getSavedUserStyleProfile(supabase)
-    const trendingForYou = profile ? await generatePersonalizedTrendNotes(profile, data.trendingTrends || []) : []
+    const trendingForYou = profile ? await generatePersonalizedTrendNotes(profile, enrichedData.trendingTrends || []) : []
 
     return NextResponse.json({
-      ...data,
+      ...enrichedData,
       trendingForYou,
     })
   } catch (error) {

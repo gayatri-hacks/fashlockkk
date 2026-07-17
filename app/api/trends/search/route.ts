@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { unstable_cache } from 'next/cache'
 import { getSupabaseClient, logSupabaseFallback, supabaseCache, supabaseCacheTtl } from '@/lib/supabase'
+import { getGeneratedFashionImage } from '@/lib/images/generated-fashion-images'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 7200
@@ -182,6 +183,11 @@ async function buildDatabaseTrend(keyword: string, gemini: any) {
 
     const pexelsQueries = gemini?.pexelsQueries || FALLBACK_PEXELS_QUERIES(keywordData.keyword)
     const pexelsImages = await fetchPexelsImages(pexelsQueries)
+    const generatedImage = await getGeneratedFashionImage({
+      entityType: 'trend',
+      entityId: Number(keywordData.id),
+      variant: 'trend_hero',
+    })
 
     return {
       id: keywordData.id,
@@ -197,6 +203,7 @@ async function buildDatabaseTrend(keyword: string, gemini: any) {
       pexelsQueries,
       pexelsImages,
       pexelsImageUrl: pexelsImages[0] || null,
+      generatedImageUrl: generatedImage?.image_url || null,
       velocity,
       topMarkets: (marketData || []).map((market: any) => ({
         code: market.market,
@@ -231,6 +238,7 @@ async function buildGeminiTrend(keyword: string, gemini: any) {
     pexelsQueries,
     pexelsImages,
     pexelsImageUrl: pexelsImages[0] || null,
+    generatedImageUrl: null,
     velocity: base,
     topMarkets: [
       { code: 'FR', market: 'France' },

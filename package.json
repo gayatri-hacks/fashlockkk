@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "images:enqueue": "tsx scripts/enqueue-trend-images.ts",
+    "images:worker": "tsx scripts/ollama-image-worker.ts"
   },
   "dependencies": {
     "@supabase/auth-helpers-nextjs": "^0.15.0",
@@ -35,6 +37,7 @@
     "eslint-config-next": "^15.3.2",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
+    "tsx": "^4.23.1",
     "typescript": "^5.8.3"
   }
 }

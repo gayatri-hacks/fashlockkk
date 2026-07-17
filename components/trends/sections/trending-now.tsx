@@ -1,6 +1,5 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
 import { TrendData } from '@/app/trends/page'
 
 interface TrendingNowProps {
@@ -13,15 +12,7 @@ function trendAnchorId(id: number) {
   return `trend-card-${id}`
 }
 
-type TrendCardImage = {
-  imageUrl: string | null
-  source?: string
-  status?: string
-}
-
 export default function TrendingNow({ trends, loading, onTrendClick }: TrendingNowProps) {
-  const [cardImages, setCardImages] = useState<Record<number, TrendCardImage>>({})
-  const visibleTrendIds = useMemo(() => trends.slice(0, 6).map((trend) => trend.id).join(','), [trends])
   const imageStyle = {
     width: '100%',
     height: '100%',
@@ -86,73 +77,9 @@ export default function TrendingNow({ trends, loading, onTrendClick }: TrendingN
     )
   }
 
-  useEffect(() => {
-    if (!trends.length) return
-
-    let cancelled = false
-    const visibleTrends = trends.slice(0, 6)
-
-    setCardImages((current) => {
-      const next = { ...current }
-      for (const trend of visibleTrends) {
-        if (next[trend.id] === undefined) {
-          next[trend.id] = { imageUrl: trend.pexelsImageUrl, source: trend.pexelsImageUrl ? 'placeholder' : 'loading', status: 'loading' }
-        }
-      }
-      return next
-    })
-
-    visibleTrends.forEach(async (trend) => {
-      try {
-        const response = await fetch('/api/trends/generate-outfit', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            context: 'trend-card',
-            cardImage: true,
-            trendKeyword: trend.keyword,
-            outfitTitle: `${trend.editorialName} trend card outfit`,
-            gender: 'women',
-            velocity: trend.velocity,
-            markets: trend.topMarkets,
-            oneLiner: trend.oneLiner,
-          }),
-        })
-        const data = response.ok ? await response.json() : null
-        if (cancelled) return
-
-        setCardImages((current) => ({
-          ...current,
-          [trend.id]: {
-            imageUrl: data?.imageUrl || trend.pexelsImageUrl || null,
-            source: data?.imageSource || (trend.pexelsImageUrl ? 'pexels' : 'fallback'),
-            status: data?.status || 'fallback',
-          },
-        }))
-      } catch (error) {
-        console.error('Trend card outfit image failed:', error)
-        if (cancelled) return
-        setCardImages((current) => ({
-          ...current,
-          [trend.id]: {
-            imageUrl: trend.pexelsImageUrl || null,
-            source: trend.pexelsImageUrl ? 'pexels' : 'fallback',
-            status: 'fallback',
-          },
-        }))
-      }
-    })
-
-    return () => {
-      cancelled = true
-    }
-  }, [visibleTrendIds, trends])
-
   const renderTrendImage = (trend: TrendData, height: string, overlay = false) => {
-    const state = cardImages[trend.id]
-    const imageUrl = state?.imageUrl || trend.pexelsImageUrl
-    const isPreparing = !state || state.status === 'loading'
-    const sourceLabel = state?.source === 'ollama' ? 'Generated for this trend' : state?.source && state.source !== 'placeholder' ? state.source.replace('_', ' ') : ''
+    const imageUrl = trend.generatedImageUrl || trend.pexelsImageUrl
+    const sourceLabel = trend.generatedImageUrl ? 'Generated for this trend' : ''
 
     return (
       <div style={{ position: 'relative', width: '100%', height, backgroundColor: '#EDE8DF', overflow: 'hidden' }}>
@@ -192,7 +119,7 @@ export default function TrendingNow({ trends, loading, onTrendClick }: TrendingN
             }}
           />
         )}
-        {(isPreparing || sourceLabel) && (
+        {sourceLabel && (
           <div
             style={{
               position: 'absolute',
@@ -210,7 +137,7 @@ export default function TrendingNow({ trends, loading, onTrendClick }: TrendingN
               zIndex: 10,
             }}
           >
-            {isPreparing ? 'Preparing look' : sourceLabel}
+            {sourceLabel}
           </div>
         )}
       </div>
