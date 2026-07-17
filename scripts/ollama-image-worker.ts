@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import "./load-env";
 import { createClient } from "@supabase/supabase-js";
 import { storagePathForFashionImage, type FashionImageVariant } from "../lib/images/build-fashion-image-prompt";
 

@@ -1,5 +1,30 @@
 create extension if not exists pgcrypto;
 
+insert into storage.buckets (
+  id,
+  name,
+  public,
+  file_size_limit,
+  allowed_mime_types
+)
+values (
+  'generated-fashion-images',
+  'generated-fashion-images',
+  true,
+  10485760,
+  array['image/png']
+)
+on conflict (id) do update set
+  public = excluded.public,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "Public read generated fashion images" on storage.objects;
+create policy "Public read generated fashion images"
+  on storage.objects
+  for select
+  using (bucket_id = 'generated-fashion-images');
+
 create table if not exists generated_fashion_images (
   id uuid primary key default gen_random_uuid(),
   entity_type text not null check (entity_type in ('trend')),
@@ -119,6 +144,9 @@ begin
 end;
 $$ language plpgsql security definer;
 
+revoke all on function claim_next_image_generation_job(text, integer) from public, anon, authenticated;
+grant execute on function claim_next_image_generation_job(text, integer) to service_role;
+
 create or replace function complete_image_generation_job(
   job_id uuid,
   completed_image_url text,
@@ -183,6 +211,9 @@ begin
 end;
 $$ language plpgsql security definer;
 
+revoke all on function complete_image_generation_job(uuid, text, text, jsonb) from public, anon, authenticated;
+grant execute on function complete_image_generation_job(uuid, text, text, jsonb) to service_role;
+
 create or replace function fail_image_generation_job(
   job_id uuid,
   failure_message text
@@ -207,3 +238,6 @@ begin
   return failed_job;
 end;
 $$ language plpgsql security definer;
+
+revoke all on function fail_image_generation_job(uuid, text) from public, anon, authenticated;
+grant execute on function fail_image_generation_job(uuid, text) to service_role;

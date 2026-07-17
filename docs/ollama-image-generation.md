@@ -5,7 +5,7 @@ Fashlock production never calls local Ollama. The production app only reads comp
 ## One-time setup
 
 1. Run the migration in `database/020_image_generation_jobs.sql` in Supabase SQL Editor.
-2. Confirm the public storage bucket exists:
+2. The migration creates or updates the public storage bucket:
    - name: `generated-fashion-images`
    - public: yes
    - mime type: `image/png`
@@ -23,7 +23,7 @@ IMAGE_WORKER_ID=fashlock-local-mac
 IMAGE_WORKER_POLL_MS=5000
 ```
 
-The worker uses `SUPABASE_SERVICE_ROLE_KEY`; never put that key in client code.
+The worker and enqueue script load `.env.local` and `.env` from the repository root. The worker uses `SUPABASE_SERVICE_ROLE_KEY`; never put that key in client code.
 
 ## Ollama
 

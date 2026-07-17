@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import "./load-env";
 import { FASHION_IMAGE_VARIANTS, type FashionImageVariant } from "../lib/images/build-fashion-image-prompt";
 import { enqueueTrendImageJob, loadTrendImageSeed } from "../lib/images/generated-fashion-images";
 import { getSupabaseClient } from "../lib/supabase";
