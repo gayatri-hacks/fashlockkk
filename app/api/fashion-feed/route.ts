@@ -9,10 +9,12 @@ const CACHE_SECONDS = 21600 // Matches the 6-hour news refresh cadence.
 const STALE_SECONDS = 86400
 const VALID_COUNTRIES = new Set(['WORLD', 'IN', 'US', 'GB', 'FR', 'IT', 'JP', 'KR'])
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!url || !key) return null
+  return createClient(url, key)
+}
 
 function normalizeCountry(country: string | null) {
   const normalized = (country ?? 'WORLD').trim().toUpperCase()
@@ -46,6 +48,9 @@ export async function GET(req: Request) {
   const limit   = normalizeLimit(searchParams.get('limit'))
 
   try {
+    const supabase = getSupabase()
+    if (!supabase) return feedResponse({ articles: [], nextPage: null })
+
     // Build query — always include WORLD articles, plus country-specific if not WORLD
     let query = supabase
       .from('news_articles')

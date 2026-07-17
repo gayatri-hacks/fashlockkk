@@ -3,10 +3,12 @@ import { createClient } from '@supabase/supabase-js'
 
 export const revalidate = 3600
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!url || !key) return null
+  return createClient(url, key)
+}
 
 // Keywords to search in Supabase for each story
 const SLUG_KEYWORDS: Record<string, string[]> = {
@@ -32,6 +34,9 @@ export async function GET(req: Request) {
   if (!keywords) return NextResponse.json({ articles: [] })
 
   try {
+    const supabase = getSupabase()
+    if (!supabase) return NextResponse.json({ articles: [] })
+
     // Search Supabase for articles matching any keyword in title or summary
     // Use ilike for case-insensitive matching on the first keyword as primary filter
     const orConditions = keywords

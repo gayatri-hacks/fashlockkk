@@ -3,10 +3,12 @@ import { createClient } from '@supabase/supabase-js'
 
 export const revalidate = 3600
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!url || !key) return null
+  return createClient(url, key)
+}
 
 async function callGemini(prompt: string): Promise<string> {
   try {
@@ -66,14 +68,17 @@ export async function GET(req: Request) {
 
   try {
     // If we have an ID, check the database first
+    const supabase = getSupabase()
     if (id) {
       try {
-        const { data } = await supabase
+        const { data } = supabase
+          ? await supabase
           .from('news_articles')
           .select('expanded_content')
           .eq('id', id)
           .limit(1)
           .single()
+          : { data: null }
         
         if (data?.expanded_content) {
           return NextResponse.json({ content: data.expanded_content })
@@ -103,7 +108,7 @@ Do not invent quotes, prices, dates, or named reactions that were not provided.`
     const content = generated || buildFallbackArticle(title, summary, source)
 
     // Save to database if we have an ID
-    if (id && content) {
+    if (supabase && id && content) {
       try {
         await supabase
           .from('news_articles')

@@ -3,11 +3,12 @@ import { createClient } from '@supabase/supabase-js'
 
 export const revalidate = 3600
 
-// Supabase client
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!url || !key) return null
+  return createClient(url, key)
+}
 
 // Static stories cache 24hrs, dynamic ones cache 1hr
 const SLUG_CONTENT: Record<string, { topic: string; region: string; angle: string }> = {
@@ -55,8 +56,10 @@ export async function GET(req: Request) {
   const type    = searchParams.get('type') ?? ''
 
   try {
+    const supabase = getSupabase()
+
     // For static slugs, check Supabase cache first
-    if (!dynamic && slug) {
+    if (supabase && !dynamic && slug) {
       try {
         const { data } = await supabase
           .from('story_editorials')
@@ -104,7 +107,7 @@ Under 450 words.`
     const editorial = await callGemini(prompt)
     
     // Save static stories to cache
-    if (!dynamic && slug && editorial) {
+    if (supabase && !dynamic && slug && editorial) {
       try {
         await supabase
           .from('story_editorials')
