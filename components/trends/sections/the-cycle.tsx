@@ -1,6 +1,7 @@
 'use client'
 
 import { TrendData } from '@/app/trends/page'
+import TrendImageCard from './trend-image-card'
 
 interface TheCycleProps {
   trends: TrendData[]
@@ -8,134 +9,32 @@ interface TheCycleProps {
   onTrendClick: (trend: TrendData) => void
 }
 
-export default function TheCycle({ trends, loading, onTrendClick }: TheCycleProps) {
-  const risingTrends = trends.filter((t) => t.velocity === 'RISING')
-  const peakingTrends = trends.filter((t) => t.velocity === 'PEAKING')
-  const fadingTrends = trends.filter((t) => t.velocity === 'FADING')
+type CycleStage = 'RISING' | 'PEAKING' | 'FADING'
 
-  const TrendColumn = ({
-    title,
-    trendList,
-    loading,
-  }: {
-    title: string
-    trendList: TrendData[]
-    loading: boolean
-  }) => (
-    <div style={{ flex: 1 }}>
-      <h3
-        style={{
-          fontFamily: 'var(--font-cormorant)',
-          fontSize: '18px',
-          fontWeight: 300,
-          fontStyle: 'italic',
-          color: '#2C2418',
-          marginBottom: '24px',
-          paddingBottom: '12px',
-          borderBottom: '0.5px solid #D4C8BC',
-        }}
-      >
-        {title}
-      </h3>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
-        {loading
-          ? Array(10)
-              .fill(0)
-              .map((_, i) => (
-                <div
-                  key={i}
-                  style={{
-                    height: '40px',
-                    backgroundColor: '#E8E0D4',
-                    animation: 'pulse 2s infinite',
-                  }}
-                />
-              ))
-          : trendList.map((trend) => (
-              <TrendRow key={trend.id} trend={trend} onTrendClick={onTrendClick} />
-            ))}
-      </div>
-    </div>
+const STAGES: Array<{ key: CycleStage; title: string }> = [
+  { key: 'RISING', title: 'Rising' },
+  { key: 'PEAKING', title: 'Peaking' },
+  { key: 'FADING', title: 'Fading' },
+]
+
+function SkeletonCard() {
+  return (
+    <div
+      style={{
+        aspectRatio: '3 / 4',
+        backgroundColor: '#E8E0D4',
+        borderRadius: '6px',
+        animation: 'pulse 2s infinite',
+      }}
+    />
   )
+}
 
-  const TrendRow = ({
-    trend,
-    onTrendClick,
-  }: {
-    trend: TrendData
-    onTrendClick: (trend: TrendData) => void
-  }) => {
-    const getVelocityIcon = () => {
-      if (trend.velocity === 'RISING') return '↑'
-      if (trend.velocity === 'PEAKING') return '•'
-      return '↓'
-    }
-
-    const getVelocityColor = () => {
-      if (trend.velocity === 'RISING') return '#B03A5B'
-      if (trend.velocity === 'PEAKING') return '#8C7B6E'
-      return '#8C7B6E'
-    }
-
-    return (
-      <div
-        onClick={() => onTrendClick(trend)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          padding: '16px 0',
-          borderBottom: '0.5px solid #E8E0D4',
-          cursor: 'pointer',
-          transition: 'all 0.2s ease',
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.paddingLeft = '8px'
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.paddingLeft = '0'
-        }}
-      >
-        <span
-          style={{
-            color: getVelocityColor(),
-            fontSize: '16px',
-            width: '16px',
-          }}
-        >
-          {getVelocityIcon()}
-        </span>
-
-        <div style={{ flex: 1 }}>
-          <div
-            style={{
-              fontFamily: 'var(--font-cormorant)',
-              fontSize: '18px',
-              fontWeight: 400,
-              fontStyle: 'italic',
-              color: '#2C2418',
-            }}
-          >
-            {trend.editorialName}
-          </div>
-          <div
-            style={{
-              fontFamily: 'var(--font-dm-sans)',
-              fontSize: '9px',
-              fontWeight: 200,
-              color: '#C4B4A6',
-              marginTop: '4px',
-            }}
-          >
-            {trend.topMarkets.slice(0, 2).map((m) => m.code).join(' · ')}
-          </div>
-        </div>
-      </div>
-    )
-  }
+export default function TheCycle({ trends, loading, onTrendClick }: TheCycleProps) {
+  let lookIndex = 0
 
   return (
-    <div style={{ padding: '64px 48px', backgroundColor: '#FAF7F4' }}>
+    <section style={{ padding: '64px 48px', backgroundColor: '#FAF7F4' }}>
       <div style={{ marginBottom: '48px' }}>
         <div
           style={{
@@ -163,10 +62,53 @@ export default function TheCycle({ trends, loading, onTrendClick }: TheCycleProp
         </h2>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '48px' }}>
-        <TrendColumn title="Rising" trendList={risingTrends} loading={loading} />
-        <TrendColumn title="Peaking" trendList={peakingTrends} loading={loading} />
-        <TrendColumn title="Fading" trendList={fadingTrends} loading={loading} />
+      <div style={{ display: 'grid', gap: '42px' }}>
+        {STAGES.map((stage) => {
+          const stageTrends = trends.filter((trend) => trend.velocity === stage.key)
+
+          return (
+            <div key={stage.key}>
+              <h3
+                style={{
+                  fontFamily: 'var(--font-cormorant)',
+                  fontSize: '24px',
+                  fontWeight: 500,
+                  fontStyle: 'italic',
+                  color: '#2C2418',
+                  margin: '0 0 18px',
+                  paddingBottom: '12px',
+                  borderBottom: '0.5px solid #D4C8BC',
+                }}
+              >
+                {stage.title}
+              </h3>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gap: '24px',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                }}
+              >
+                {loading
+                  ? Array.from({ length: 3 }).map((_, index) => <SkeletonCard key={`${stage.key}-${index}`} />)
+                  : stageTrends.map((trend) => {
+                      const index = lookIndex
+                      lookIndex += 1
+
+                      return (
+                        <TrendImageCard
+                          key={`${stage.key}-${trend.id}`}
+                          trend={trend}
+                          index={index}
+                          onTrendClick={onTrendClick}
+                        />
+                      )
+                    })}
+              </div>
+            </div>
+          )
+        })}
       </div>
 
       <style>{`
@@ -175,6 +117,6 @@ export default function TheCycle({ trends, loading, onTrendClick }: TheCycleProp
           50% { opacity: 0.5; }
         }
       `}</style>
-    </div>
+    </section>
   )
 }
