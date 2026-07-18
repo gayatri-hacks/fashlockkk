@@ -21,6 +21,20 @@ export type PeriodFinalizationPlan = {
   expectedRegions: string[];
 };
 
+export type PeriodCoverage = {
+  periodMonth: string;
+  completeRegions: string[];
+};
+
+export type CatchUpPeriodPlan = {
+  currentPartialMonth: string;
+  latestClosedMonth: string;
+  latestCompleteBaseline: string | null;
+  closedMonthsToFinalize: string[];
+  currentPartialRegions: string[];
+  blockedClosedMonths: string[];
+};
+
 export const MATERIAL_GLOBAL_COVERAGE_RATIO = 0.8;
 
 function pad(value: number) {
@@ -39,6 +53,17 @@ export function addCalendarMonths(monthStart: string, months: number) {
 
 export function precedingCalendarMonth(date: Date) {
   return addCalendarMonths(calendarMonthStart(date), -1);
+}
+
+export function enumerateCalendarMonthsAfter(startExclusive: string | null, endInclusive: string) {
+  const months: string[] = [];
+  if (!startExclusive) return [endInclusive];
+
+  for (let cursor = addCalendarMonths(startExclusive, 1); cursor <= endInclusive; cursor = addCalendarMonths(cursor, 1)) {
+    months.push(cursor);
+  }
+
+  return months;
 }
 
 export function expectedPeriodEnd(monthStart: string) {
@@ -149,6 +174,82 @@ export function latestComparableCompletePeriod({
   }
 
   return null;
+}
+
+export function latestMateriallyCompleteCoverageMonth({
+  coverages,
+  configuredRegions,
+  currentPartialMonth,
+  minCoverageRatio = MATERIAL_GLOBAL_COVERAGE_RATIO,
+}: {
+  coverages: PeriodCoverage[];
+  configuredRegions: string[];
+  currentPartialMonth: string;
+  minCoverageRatio?: number;
+}) {
+  const expectedRegions = configuredRegions.map((region) => region.toUpperCase());
+  const candidates = coverages
+    .filter((coverage) => coverage.periodMonth < currentPartialMonth)
+    .sort((a, b) => b.periodMonth.localeCompare(a.periodMonth));
+
+  for (const coverage of candidates) {
+    const completeRegions = new Set(coverage.completeRegions.map((region) => region.toUpperCase()));
+    const ratio = expectedRegions.filter((region) => completeRegions.has(region)).length / Math.max(1, expectedRegions.length);
+    if (ratio >= minCoverageRatio) return coverage.periodMonth;
+  }
+
+  return null;
+}
+
+export function buildCatchUpPeriodPlan({
+  now,
+  configuredRegions,
+  coverages,
+  statuses = [],
+  minCoverageRatio = MATERIAL_GLOBAL_COVERAGE_RATIO,
+}: {
+  now: Date;
+  configuredRegions: string[];
+  coverages: PeriodCoverage[];
+  statuses?: RegionPeriodStatus[];
+  minCoverageRatio?: number;
+}): CatchUpPeriodPlan {
+  const currentPartialMonth = calendarMonthStart(now);
+  const latestClosedMonth = precedingCalendarMonth(now);
+  const latestCompleteBaseline = latestMateriallyCompleteCoverageMonth({
+    coverages,
+    configuredRegions,
+    currentPartialMonth,
+    minCoverageRatio,
+  });
+  const candidateClosedMonths = latestCompleteBaseline
+    ? enumerateCalendarMonthsAfter(latestCompleteBaseline, latestClosedMonth)
+    : enumerateCalendarMonthsAfter(addCalendarMonths(latestClosedMonth, -1), latestClosedMonth);
+  const expectedRegions = configuredRegions.map((region) => region.toUpperCase());
+
+  const closedMonthsToFinalize = candidateClosedMonths.filter((periodMonth) => {
+    const coverage = globalPeriodCoverage({
+      periodMonth,
+      configuredRegions: expectedRegions,
+      statuses,
+      minCoverageRatio,
+    });
+    return !coverage.isMateriallyComplete;
+  });
+
+  const blockedClosedMonths = closedMonthsToFinalize.filter((periodMonth) => {
+    const rows = statuses.filter((status) => status.periodMonth === periodMonth);
+    return rows.some((status) => status.periodStatus !== "complete");
+  });
+
+  return {
+    currentPartialMonth,
+    latestClosedMonth,
+    latestCompleteBaseline,
+    closedMonthsToFinalize,
+    currentPartialRegions: expectedRegions,
+    blockedClosedMonths,
+  };
 }
 
 export function shouldUseHistoricalPoint({

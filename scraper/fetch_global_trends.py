@@ -25,6 +25,7 @@ CHUNKS = [
 ]
 
 MIN_FINALIZED_KEYWORD_RATIO = float(os.getenv("TREND_FINALIZATION_MIN_KEYWORD_RATIO", "0.6"))
+MATERIAL_GLOBAL_COVERAGE_RATIO = float(os.getenv("TREND_MATERIAL_GLOBAL_COVERAGE_RATIO", "0.8"))
 PARTIAL_FRESH_HOURS = float(os.getenv("TREND_PARTIAL_FRESH_HOURS", "20"))
 
 def parse_args():
@@ -43,6 +44,16 @@ def add_months(value: date, months: int) -> date:
     year = value.year + month // 12
     month = month % 12 + 1
     return date(year, month, 1)
+
+def enumerate_months_after(start_exclusive: date | None, end_inclusive: date) -> list[date]:
+    if start_exclusive is None:
+        return [end_inclusive]
+    months = []
+    cursor = add_months(start_exclusive, 1)
+    while cursor <= end_inclusive:
+        months.append(cursor)
+        cursor = add_months(cursor, 1)
+    return months
 
 def month_window(period_month: date, as_of: date, complete: bool) -> tuple[str, str]:
     start = period_month
@@ -103,6 +114,153 @@ def existing_period_state(client, region: str, period_month: date):
 def existing_period_status(client, region: str, period_month: date):
     state = existing_period_state(client, region, period_month)
     return state.get("period_status") if state else None
+
+def fetch_all_rows(query_factory, page_size: int = 1000):
+    rows = []
+    start = 0
+    while True:
+        result = query_factory(start, start + page_size - 1).execute()
+        batch = result.data or []
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        start += page_size
+    return rows
+
+def fetch_all_period_statuses(client):
+    try:
+        return fetch_all_rows(lambda start, end: (
+            client.table("trend_period_region_status")
+            .select("region, period_month, period_status, attempted_at, retry_after")
+            .range(start, end)
+        ))
+    except Exception as e:
+        logger.warning("Could not read period status ledger: %s", e)
+        return []
+
+def coverage_from_period_statuses(statuses: list[dict]):
+    grouped: dict[str, set[str]] = {}
+    for status in statuses:
+        if status.get("period_status") != "complete":
+            continue
+        period_month = str(status.get("period_month") or "")
+        region = str(status.get("region") or "").upper()
+        if period_month and region:
+            grouped.setdefault(period_month, set()).add(region)
+    return [
+        {"period_month": month, "complete_regions": sorted(regions)}
+        for month, regions in grouped.items()
+    ]
+
+def fetch_historical_period_coverages(client, *, current_month: date, keyword_count: int, regions: list[str]):
+    region_set = {region.upper() for region in regions}
+    min_keywords = max(1, int(keyword_count * MIN_FINALIZED_KEYWORD_RATIO))
+    grouped: dict[tuple[str, str], set[int]] = {}
+    try:
+        rows = fetch_all_rows(lambda start, end: (
+            client.table("historical_trend_data")
+            .select("market, month, keyword_id, period_status")
+            .lt("month", current_month.isoformat())
+            .range(start, end)
+        ))
+    except Exception as e:
+        logger.warning("Could not read historical period coverage: %s", e)
+        return []
+
+    for row in rows:
+        region = str(row.get("market") or "").upper()
+        month = str(row.get("month") or "")
+        if region not in region_set or not month:
+            continue
+        if row.get("period_status") == "partial":
+            continue
+        try:
+            keyword_id = int(row.get("keyword_id"))
+        except (TypeError, ValueError):
+            continue
+        grouped.setdefault((month, region), set()).add(keyword_id)
+
+    month_regions: dict[str, set[str]] = {}
+    for (month, region), keyword_ids in grouped.items():
+        if len(keyword_ids) >= min_keywords:
+            month_regions.setdefault(month, set()).add(region)
+
+    return [
+        {"period_month": month, "complete_regions": sorted(regions)}
+        for month, regions in month_regions.items()
+    ]
+
+def latest_materially_complete_month(coverages: list[dict], *, current_month: date, regions: list[str]):
+    expected_regions = {region.upper() for region in regions}
+    candidates = sorted(
+        [coverage for coverage in coverages if str(coverage.get("period_month") or "") < current_month.isoformat()],
+        key=lambda coverage: str(coverage.get("period_month") or ""),
+        reverse=True,
+    )
+    for coverage in candidates:
+        complete_regions = {str(region).upper() for region in coverage.get("complete_regions", [])}
+        coverage_ratio = len(expected_regions & complete_regions) / max(1, len(expected_regions))
+        if coverage_ratio >= MATERIAL_GLOBAL_COVERAGE_RATIO:
+            return datetime.strptime(str(coverage["period_month"]), "%Y-%m-%d").date()
+    return None
+
+def build_catch_up_plan(client, *, as_of: date, keyword_count: int):
+    current_month = month_start(as_of)
+    latest_closed_month = add_months(current_month, -1)
+    ledger_rows = fetch_all_period_statuses(client)
+    historical_coverages = None
+    if ledger_rows:
+        coverage_source = "period_ledger"
+        coverages = coverage_from_period_statuses(ledger_rows)
+    else:
+        coverage_source = "historical_trend_data"
+        historical_coverages = fetch_historical_period_coverages(
+            client,
+            current_month=current_month,
+            keyword_count=keyword_count,
+            regions=MARKETS,
+        )
+        coverages = historical_coverages
+    latest_complete = latest_materially_complete_month(
+        coverages,
+        current_month=current_month,
+        regions=MARKETS,
+    )
+    if ledger_rows and latest_complete is None:
+        coverage_source = "historical_trend_data"
+        historical_coverages = historical_coverages or fetch_historical_period_coverages(
+            client,
+            current_month=current_month,
+            keyword_count=keyword_count,
+            regions=MARKETS,
+        )
+        latest_complete = latest_materially_complete_month(
+            historical_coverages,
+            current_month=current_month,
+            regions=MARKETS,
+        )
+    closed_months = enumerate_months_after(latest_complete, latest_closed_month)
+    status_by_region_month = {
+        (str(row.get("region") or "").upper(), str(row.get("period_month") or "")): row
+        for row in ledger_rows
+    }
+    plan = {
+        "current_month": current_month,
+        "latest_closed_month": latest_closed_month,
+        "latest_complete_month": latest_complete,
+        "coverage_source": coverage_source,
+        "closed_months": closed_months,
+        "status_by_region_month": status_by_region_month,
+    }
+    logger.info(
+        "Catch-up plan: source=%s latest_complete=%s closed_complete=%s current_partial=%s regions=%s",
+        coverage_source,
+        latest_complete,
+        [month.isoformat() for month in closed_months],
+        current_month,
+        MARKETS,
+    )
+    return plan
 
 def state_retry_pending(state) -> bool:
     retry_after = parse_iso_datetime(state.get("retry_after") if state else None)
@@ -257,12 +415,15 @@ def run_rollover(client, *, as_of: date, dry_run: bool, fail_on_incomplete: bool
 
     keyword_lookup = {row["keyword"]: row["id"] for row in keywords_data}
     keywords = list(keyword_lookup.keys())
-    current_month = month_start(as_of)
-    preceding_month = add_months(current_month, -1)
+    plan = build_catch_up_plan(client, as_of=as_of, keyword_count=len(keyword_lookup))
+    current_month = plan["current_month"]
+    closed_months = plan["closed_months"]
+    status_by_region_month = plan["status_by_region_month"]
     pytrends = TrendReq(hl="en-US", tz=330, timeout=(10, 30), retries=3, backoff_factor=1.0)
     period_status_rows = []
+    closed_global_statuses = []
     summary = {
-        "preceding_finalized": [],
+        "closed_finalized": [],
         "current_partial": [],
         "provider_not_ready": [],
         "failed": [],
@@ -270,78 +431,103 @@ def run_rollover(client, *, as_of: date, dry_run: bool, fail_on_incomplete: bool
         "retry_not_due": [],
     }
 
-    logger.info("Rollover as_of=%s preceding=%s current_partial=%s", as_of, preceding_month, current_month)
+    logger.info(
+        "Rollover as_of=%s latest_closed=%s closed_complete=%s current_partial=%s",
+        as_of,
+        plan["latest_closed_month"],
+        [month.isoformat() for month in closed_months],
+        current_month,
+    )
+
+    def remember_status(payload):
+        if not payload:
+            return
+        period_status_rows.append(payload)
+        region = str(payload.get("region") or "").upper()
+        period_month = str(payload.get("period_month") or "")
+        if region and period_month:
+            status_by_region_month[(region, period_month)] = payload
+
+    for period_month in closed_months:
+        for market in MARKETS:
+            state = status_by_region_month.get((market, period_month.isoformat()))
+            if state and state.get("period_status") == "complete":
+                logger.info("Finalized period already complete for %s %s; skipping", market, period_month)
+                summary["already_complete"].append(f"{period_month.isoformat()}:{market}")
+                remember_status({
+                    "region": market,
+                    "period_month": period_month.isoformat(),
+                    "period_status": "complete",
+                })
+            elif state and state_retry_pending(state):
+                logger.info("Retry is not due yet for %s %s; skipping until %s", market, period_month, state.get("retry_after"))
+                summary["retry_not_due"].append(f"{period_month.isoformat()}:{market}")
+                remember_status({
+                    "region": market,
+                    "period_month": period_month.isoformat(),
+                    "period_status": state.get("period_status"),
+                })
+            else:
+                try:
+                    df = fetch_period_dataframe(pytrends, keywords, period_month, as_of, market, complete=True)
+                    records = build_period_records(keyword_lookup, df, period_month, market, complete=True)
+                    keyword_count = len({record["keyword_id"] for record in records})
+                    provider_ready = keyword_count >= max(1, int(len(keyword_lookup) * MIN_FINALIZED_KEYWORD_RATIO))
+                    if provider_ready:
+                        save_records(client, records, dry_run)
+                        status_payload = upsert_period_status(
+                            client,
+                            region=market,
+                            period_month=period_month,
+                            period_status="complete",
+                            provider_ready=True,
+                            row_count=len(records),
+                            keyword_count=keyword_count,
+                            dry_run=dry_run,
+                        )
+                        remember_status(status_payload)
+                        summary["closed_finalized"].append(f"{period_month.isoformat()}:{market}")
+                        logger.info("Finalized %s for %s with %d rows", period_month, market, len(records))
+                    else:
+                        status_payload = upsert_period_status(
+                            client,
+                            region=market,
+                            period_month=period_month,
+                            period_status="provider_not_ready",
+                            provider_ready=False,
+                            row_count=len(records),
+                            keyword_count=keyword_count,
+                            error_message="Provider did not return enough finalized keyword coverage.",
+                            dry_run=dry_run,
+                        )
+                        remember_status(status_payload)
+                        summary["provider_not_ready"].append(f"{period_month.isoformat()}:{market}")
+                        logger.warning("Provider not ready for %s %s: %d/%d keywords", market, period_month, keyword_count, len(keyword_lookup))
+                except Exception as e:
+                    status_payload = upsert_period_status(
+                        client,
+                        region=market,
+                        period_month=period_month,
+                        period_status="failed",
+                        provider_ready=False,
+                        row_count=0,
+                        keyword_count=0,
+                        error_message=str(e),
+                        dry_run=dry_run,
+                    )
+                    remember_status(status_payload)
+                    summary["failed"].append(f"{period_month.isoformat()}:{market}")
+                    logger.warning("Failed finalizing %s %s: %s", period_month, market, e)
+
+        closed_global_statuses.append(upsert_global_period_status(
+            client,
+            period_month=period_month,
+            current_month=current_month,
+            dry_run=dry_run,
+            status_rows=period_status_rows if dry_run else None,
+        ))
 
     for market in MARKETS:
-        preceding_state = existing_period_state(client, market, preceding_month)
-        if preceding_state and preceding_state.get("period_status") == "complete":
-            logger.info("Finalized period already complete for %s %s; skipping", market, preceding_month)
-            summary["already_complete"].append(market)
-            period_status_rows.append({
-                "region": market,
-                "period_month": preceding_month.isoformat(),
-                "period_status": "complete",
-            })
-        elif preceding_state and state_retry_pending(preceding_state):
-            logger.info("Retry is not due yet for %s %s; skipping until %s", market, preceding_month, preceding_state.get("retry_after"))
-            summary["retry_not_due"].append(market)
-            period_status_rows.append({
-                "region": market,
-                "period_month": preceding_month.isoformat(),
-                "period_status": preceding_state.get("period_status"),
-            })
-        else:
-            try:
-                df = fetch_period_dataframe(pytrends, keywords, preceding_month, as_of, market, complete=True)
-                records = build_period_records(keyword_lookup, df, preceding_month, market, complete=True)
-                keyword_count = len({record["keyword_id"] for record in records})
-                provider_ready = keyword_count >= max(1, int(len(keyword_lookup) * MIN_FINALIZED_KEYWORD_RATIO))
-                if provider_ready:
-                    save_records(client, records, dry_run)
-                    status_payload = upsert_period_status(
-                        client,
-                        region=market,
-                        period_month=preceding_month,
-                        period_status="complete",
-                        provider_ready=True,
-                        row_count=len(records),
-                        keyword_count=keyword_count,
-                        dry_run=dry_run,
-                    )
-                    period_status_rows.append(status_payload)
-                    summary["preceding_finalized"].append(market)
-                    logger.info("Finalized %s for %s with %d rows", preceding_month, market, len(records))
-                else:
-                    status_payload = upsert_period_status(
-                        client,
-                        region=market,
-                        period_month=preceding_month,
-                        period_status="provider_not_ready",
-                        provider_ready=False,
-                        row_count=len(records),
-                        keyword_count=keyword_count,
-                        error_message="Provider did not return enough finalized keyword coverage.",
-                        dry_run=dry_run,
-                    )
-                    period_status_rows.append(status_payload)
-                    summary["provider_not_ready"].append(market)
-                    logger.warning("Provider not ready for %s %s: %d/%d keywords", market, preceding_month, keyword_count, len(keyword_lookup))
-            except Exception as e:
-                status_payload = upsert_period_status(
-                    client,
-                    region=market,
-                    period_month=preceding_month,
-                    period_status="failed",
-                    provider_ready=False,
-                    row_count=0,
-                    keyword_count=0,
-                    error_message=str(e),
-                    dry_run=dry_run,
-                )
-                period_status_rows.append(status_payload)
-                summary["failed"].append(market)
-                logger.warning("Failed finalizing %s %s: %s", market, preceding_month, e)
-
         current_state = existing_period_state(client, market, current_month)
         if partial_period_is_fresh(current_state):
             logger.info("Current partial period is fresh for %s %s; skipping", market, current_month)
@@ -361,7 +547,7 @@ def run_rollover(client, *, as_of: date, dry_run: bool, fail_on_incomplete: bool
                 keyword_count=len({record["keyword_id"] for record in records}),
                 dry_run=dry_run,
             )
-            period_status_rows.append(status_payload)
+            remember_status(status_payload)
             summary["current_partial"].append(market)
             logger.info("Stored partial %s for %s with %d rows", current_month, market, len(records))
         except Exception as e:
@@ -376,18 +562,26 @@ def run_rollover(client, *, as_of: date, dry_run: bool, fail_on_incomplete: bool
                 error_message=str(e),
                 dry_run=dry_run,
             )
-            period_status_rows.append(status_payload)
+            remember_status(status_payload)
             summary["failed"].append(market)
             logger.warning("Failed partial collection %s %s: %s", market, current_month, e)
 
-    preceding_global = upsert_global_period_status(client, period_month=preceding_month, current_month=current_month, dry_run=dry_run, status_rows=period_status_rows if dry_run else None)
     upsert_global_period_status(client, period_month=current_month, current_month=current_month, dry_run=dry_run, status_rows=period_status_rows if dry_run else None)
     logger.info("Rollover summary: %s", summary)
-    if fail_on_incomplete and preceding_global and not preceding_global.get("is_materially_complete"):
+    incomplete_closed = [
+        payload for payload in closed_global_statuses
+        if payload and not payload.get("is_materially_complete")
+    ]
+    if fail_on_incomplete and incomplete_closed:
         logger.error(
-            "Previous period %s is not materially complete. Missing regions: %s",
-            preceding_month,
-            ", ".join(preceding_global.get("missing_regions", [])),
+            "Closed periods remain incomplete: %s",
+            [
+                {
+                    "period_month": payload.get("period_month"),
+                    "missing_regions": payload.get("missing_regions", []),
+                }
+                for payload in incomplete_closed
+            ],
         )
         return 2
     return 0

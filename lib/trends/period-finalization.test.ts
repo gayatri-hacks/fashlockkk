@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   addCalendarMonths,
+  buildCatchUpPeriodPlan,
   buildPeriodFinalizationPlan,
   calendarMonthStart,
   dedupeHistoricalPeriodRecords,
@@ -11,6 +12,7 @@ import {
   latestComparableCompletePeriod,
   precedingCalendarMonth,
   shouldUseHistoricalPoint,
+  type PeriodCoverage,
   type RegionPeriodStatus,
 } from "@/lib/trends/period-finalization";
 import { computeGlobalTrendScores, computeRegionalTrendScores, type HistoricalTrendPoint } from "@/lib/trends/scoring";
@@ -137,4 +139,69 @@ test("year rollover from December to January targets December finalisation", () 
   assert.equal(calendarMonthStart(jan1), "2027-01-01");
   assert.equal(precedingCalendarMonth(jan1), "2026-12-01");
   assert.equal(addCalendarMonths("2026-12-01", 1), "2027-01-01");
+});
+
+test("catch-up plans May and June complete plus July partial when latest historical month is April", () => {
+  const coverage: PeriodCoverage[] = [
+    { periodMonth: "2026-04-01", completeRegions: regions },
+  ];
+  const plan = buildCatchUpPeriodPlan({
+    now: new Date("2026-07-18T00:00:00.000Z"),
+    configuredRegions: regions,
+    coverages: coverage,
+  });
+
+  assert.equal(plan.latestCompleteBaseline, "2026-04-01");
+  assert.deepEqual(plan.closedMonthsToFinalize, ["2026-05-01", "2026-06-01"]);
+  assert.equal(plan.currentPartialMonth, "2026-07-01");
+  assert.deepEqual(plan.currentPartialRegions, regions);
+});
+
+test("catch-up enumerates multiple missing closed months without hardcoded dates", () => {
+  const plan = buildCatchUpPeriodPlan({
+    now: new Date("2027-03-09T00:00:00.000Z"),
+    configuredRegions: regions,
+    coverages: [{ periodMonth: "2026-11-01", completeRegions: regions }],
+  });
+
+  assert.deepEqual(plan.closedMonthsToFinalize, [
+    "2026-12-01",
+    "2027-01-01",
+    "2027-02-01",
+  ]);
+  assert.equal(plan.currentPartialMonth, "2027-03-01");
+});
+
+test("catch-up skips already-finalized complete months", () => {
+  const statuses: RegionPeriodStatus[] = regions.map((region) => ({
+    region,
+    periodMonth: "2026-05-01",
+    periodStatus: "complete",
+  }));
+  const plan = buildCatchUpPeriodPlan({
+    now: new Date("2026-07-18T00:00:00.000Z"),
+    configuredRegions: regions,
+    coverages: [{ periodMonth: "2026-04-01", completeRegions: regions }],
+    statuses,
+  });
+
+  assert.deepEqual(plan.closedMonthsToFinalize, ["2026-06-01"]);
+});
+
+test("incomplete closed month remains a recomputation blocker", () => {
+  const statuses: RegionPeriodStatus[] = [
+    { region: "IN", periodMonth: "2026-05-01", periodStatus: "complete" },
+    { region: "US", periodMonth: "2026-05-01", periodStatus: "provider_not_ready" },
+    { region: "FR", periodMonth: "2026-05-01", periodStatus: "complete" },
+  ];
+  const plan = buildCatchUpPeriodPlan({
+    now: new Date("2026-07-18T00:00:00.000Z"),
+    configuredRegions: regions,
+    coverages: [{ periodMonth: "2026-04-01", completeRegions: regions }],
+    statuses,
+    minCoverageRatio: 1,
+  });
+
+  assert.deepEqual(plan.closedMonthsToFinalize, ["2026-05-01", "2026-06-01"]);
+  assert.deepEqual(plan.blockedClosedMonths, ["2026-05-01"]);
 });
