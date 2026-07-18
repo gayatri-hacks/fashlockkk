@@ -34,7 +34,7 @@ export type TrendData = {
   pexelsImageUrl: string | null
   conceptImageUrl?: string | null
   generatedImageUrl?: string | null
-  velocity: 'RISING' | 'PEAKING' | 'FADING'
+  velocity: 'RISING' | 'PEAKING' | 'FADING' | 'STABLE' | 'INSUFFICIENT_DATA'
   topMarkets: Array<{ code: string; market: string }>
   trendData: Array<{ month: string; value: number }>
 }

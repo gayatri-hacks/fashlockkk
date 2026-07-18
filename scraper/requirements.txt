@@ -4,3 +4,5 @@ supabase>=2.15.3
 pandas>=2.2.2
 beautifulsoup4>=4.12.3
 requests>=2.32.3
+pytrends>=4.9.2
+urllib3<2

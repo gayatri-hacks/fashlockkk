@@ -1,0 +1,118 @@
+name: Monthly Trend Update
+
+on:
+  schedule:
+    - cron: "30 2 3,6,10,15 * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run ingestion and recomputation without production writes"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+concurrency:
+  group: monthly-trend-update-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  update-trends:
+    name: Update regional trend intelligence
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      TREND_PIPELINE_SECRET: ${{ secrets.TREND_PIPELINE_SECRET }}
+      FASHLOCK_PRODUCTION_URL: ${{ secrets.FASHLOCK_PRODUCTION_URL }}
+      TREND_MARKETS: ${{ vars.TREND_MARKETS || 'IN,US,GB,FR,IT,JP,KR,AU,BR,AE' }}
+      AI_TREND_REFINEMENT_ENABLED: "true"
+      AUTO_ENQUEUE_TREND_IMAGES_ENABLED: "false"
+      MAX_AI_TRENDS_PER_RUN: "8"
+      TREND_FINALIZATION_MIN_KEYWORD_RATIO: "0.6"
+      TREND_PARTIAL_FRESH_HOURS: "744"
+      TREND_UPDATE_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == 'true' && 'true' || 'false' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          missing=0
+          for name in NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY GEMINI_API_KEY TREND_PIPELINE_SECRET FASHLOCK_PRODUCTION_URL; do
+            if [ -z "${!name}" ]; then
+              echo "::error title=Missing secret::$name is required for the monthly trend scheduler"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Python scraper dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r scraper/requirements.txt
+
+      - name: Verify period finalization schema
+        run: npm run trends:verify-period-finalization
+
+      - name: Verify Python scraper syntax
+        run: python -B -m py_compile scraper/fetch_global_trends.py
+
+      - name: Ingest regional trend data and finalize periods
+        shell: bash
+        run: |
+          if [ "$TREND_UPDATE_DRY_RUN" = "true" ]; then
+            npm run trends:rollover -- --dry-run
+          else
+            npm run trends:rollover -- --fail-on-incomplete
+          fi
+
+      - name: Recompute trend scores and evidence-backed names
+        shell: bash
+        run: |
+          if [ "$TREND_UPDATE_DRY_RUN" = "true" ]; then
+            npm run trends:recompute -- --dry-run --limit 75 --refine-names
+          else
+            npm run trends:recompute -- --write --limit 75 --refine-names
+          fi
+
+      - name: Record trend period status
+        if: always()
+        run: npm run trends:period-status
+
+      - name: Revalidate production Trends page
+        if: ${{ success() && env.TREND_UPDATE_DRY_RUN == 'false' }}
+        shell: bash
+        run: |
+          base_url="${FASHLOCK_PRODUCTION_URL%/}"
+          curl --fail-with-body --silent --show-error \
+            --request POST "$base_url/api/cron/revalidate-trends" \
+            --header "Authorization: Bearer $TREND_PIPELINE_SECRET"

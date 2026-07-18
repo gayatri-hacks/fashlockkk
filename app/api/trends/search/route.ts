@@ -3,6 +3,8 @@ import { unstable_cache } from 'next/cache'
 import { getSupabaseClient, logSupabaseFallback, supabaseCache, supabaseCacheTtl } from '@/lib/supabase'
 import { enqueueTrendImageJob, getGeneratedFashionImage } from '@/lib/images/generated-fashion-images'
 import { syntheticTrendIdForKeyword } from '@/lib/images/build-fashion-image-prompt'
+import { findMultiRegionTrendForSearch } from '@/lib/trends/multi-region-pipeline'
+import { isTrendImageAutoEnqueueEnabled } from '@/lib/trends/config'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 7200
@@ -299,7 +301,7 @@ async function attachCardCoverImages<T extends SearchTrend>(trend: T): Promise<T
     if (conceptImageUrl && generatedImageUrl) break
   }
 
-  if (!conceptImageUrl && candidateTrendIds[0]) {
+  if (!conceptImageUrl && candidateTrendIds[0] && isTrendImageAutoEnqueueEnabled()) {
     try {
       await enqueueTrendImageJob({
         trend: {
@@ -325,6 +327,11 @@ async function attachCardCoverImages<T extends SearchTrend>(trend: T): Promise<T
 }
 
 async function searchTrend(keyword: string) {
+  const multiRegionTrend = await findMultiRegionTrendForSearch(keyword)
+  if (multiRegionTrend) {
+    return { source: 'multi-region', trend: multiRegionTrend }
+  }
+
   const prompt = `You are Fashlock's trend intelligence engine.
 The user searched for: ${keyword}
 Generate trend intelligence as JSON:

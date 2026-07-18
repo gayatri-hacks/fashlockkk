@@ -4,6 +4,8 @@ import { getAuthenticatedUserId } from '@/lib/supabase-auth'
 import { getLatestTrendMonth, getTopTrendingKeywords, trendVelocityLabel } from '@/lib/trend-velocity'
 import { enqueueTrendImageJob, getGeneratedFashionImagesForTrends } from '@/lib/images/generated-fashion-images'
 import { syntheticTrendIdForKeyword } from '@/lib/images/build-fashion-image-prompt'
+import { getMultiRegionTrendOverview } from '@/lib/trends/multi-region-pipeline'
+import { isTrendImageAutoEnqueueEnabled } from '@/lib/trends/config'
 
 export const dynamic = 'force-dynamic'
 const GEMINI_MODEL = 'gemini-2.5-flash'
@@ -99,7 +101,7 @@ async function attachGeneratedTrendImages<T extends { id: number; keyword?: stri
         generatedImages.get(`${syntheticId}:trend_hero`)?.image_url ||
         null
 
-      if (!conceptImageUrl && trend.keyword) {
+      if (!conceptImageUrl && trend.keyword && isTrendImageAutoEnqueueEnabled()) {
         try {
           await enqueueTrendImageJob({
             trend: {
@@ -358,6 +360,11 @@ export async function GET() {
     }
 
     const data = await supabaseCache('trends-overview-data:in', supabaseCacheTtl('historical_trend_data'), async () => {
+      const multiRegionData = await getMultiRegionTrendOverview()
+      if (multiRegionData?.trendingTrends?.length || multiRegionData?.cycleTrends?.length) {
+        return multiRegionData
+      }
+
       const latestDate = (await getLatestTrendMonth(supabase, 'IN')) || '2026-04-01'
       const trendingData = await getTopTrendingKeywords('IN', 6)
 
