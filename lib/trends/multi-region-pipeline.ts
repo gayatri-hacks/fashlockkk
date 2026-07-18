@@ -1,5 +1,5 @@
 import { getSupabaseClient } from "@/lib/supabase";
-import { getGeneratedFashionImage, enqueueTrendImageJob } from "@/lib/images/generated-fashion-images";
+import { enqueueTrendImageJob } from "@/lib/images/generated-fashion-images";
 import {
   SUPPORTED_TREND_REGIONS,
   TREND_COMPUTATION_VERSION,
@@ -25,6 +25,7 @@ import {
   deterministicEditorialFallback,
   evidenceHash,
   refineEditorialName,
+  validateEditorialNameResult,
   type TrendEvidenceBundle,
 } from "@/lib/trends/editorial-refinement";
 import {
@@ -448,7 +449,16 @@ export async function recomputeMultiRegionTrends({
           .limit(1)
           .maybeSingle();
 
-        if (cachedName?.editorial_display_name) {
+        const cachedValidation = cachedName?.editorial_display_name
+          ? validateEditorialNameResult({
+              display_name: String(cachedName.editorial_display_name),
+              confidence: toNumber(cachedName.ai_confidence),
+              used_facets: Array.isArray(cachedName.used_facets) ? cachedName.used_facets : [score.canonicalKeyword],
+              reason: String(cachedName.rationale || "Cached refinement."),
+            }, bundle)
+          : null;
+
+        if (cachedName?.editorial_display_name && cachedValidation?.ok) {
           refinement = {
             displayName: String(cachedName.editorial_display_name),
             confidence: toNumber(cachedName.ai_confidence),
@@ -457,6 +467,11 @@ export async function recomputeMultiRegionTrends({
             reason: String(cachedName.rationale || "Cached refinement."),
             usedFacets: Array.isArray(cachedName.used_facets) ? cachedName.used_facets : [score.canonicalKeyword],
             prompt: "",
+          };
+        } else if (cachedName?.editorial_display_name) {
+          refinement = {
+            ...refinement,
+            reason: cachedValidation && !cachedValidation.ok ? `Cached refinement rejected: ${cachedValidation.reason}` : "Cached refinement rejected.",
           };
         } else {
           aiAttempts += 1;
@@ -565,8 +580,6 @@ export async function recomputeMultiRegionTrends({
       if (enqueueImages) {
         for (const score of globalScores) {
           if (!score.primaryKeywordId) continue;
-          const existing = await getGeneratedFashionImage({ entityType: "trend", entityId: score.primaryKeywordId, variant: "trend_concept" });
-          if (existing?.image_url) continue;
           const refinement = editorialByKeyword.get(score.canonicalKeyword);
           await enqueueTrendImageJob({
             trend: {

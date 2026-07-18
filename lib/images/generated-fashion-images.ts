@@ -6,6 +6,11 @@ import {
   type FashionImageEntityType,
   type FashionImageVariant,
 } from "@/lib/images/build-fashion-image-prompt";
+import {
+  buildTrendImageBrief,
+  TREND_IMAGE_BRIEF_VERSION,
+  TREND_IMAGE_PROMPT_VERSION,
+} from "@/lib/images/trend-image-brief";
 
 export const DEFAULT_OLLAMA_IMAGE_MODEL = process.env.OLLAMA_IMAGE_MODEL || "x/flux2-klein:4b";
 export const DEFAULT_OLLAMA_IMAGE_SIZE = process.env.OLLAMA_IMAGE_SIZE || "1024x1024";
@@ -31,6 +36,17 @@ export type GeneratedFashionImage = {
   image_url: string;
   metadata?: Record<string, unknown> | null;
 };
+
+function conceptImageIsCurrent(image: GeneratedFashionImage | null) {
+  if (!image?.image_url) return false;
+  const metadata = image.metadata || {};
+  const reviewStatus = String(metadata.reviewStatus || metadata.validationStatus || "");
+  return (
+    metadata.briefVersion === TREND_IMAGE_BRIEF_VERSION &&
+    metadata.promptVersion === TREND_IMAGE_PROMPT_VERSION &&
+    (reviewStatus === "accepted" || reviewStatus === "approved")
+  );
+}
 
 export async function getGeneratedFashionImage({
   entityType,
@@ -131,6 +147,7 @@ export function buildTrendImageJobPayload({
   imageSize?: string;
 }) {
   const resolvedImageSize = imageSize || (variant === "trend_concept" ? DEFAULT_OLLAMA_CONCEPT_IMAGE_SIZE : DEFAULT_OLLAMA_IMAGE_SIZE);
+  const trendConceptBrief = variant === "trend_concept" ? buildTrendImageBrief(trend.keyword) : null;
   const prompt = buildFashionImagePrompt({
     entityType: "trend",
     entityId: trend.id,
@@ -159,6 +176,11 @@ export function buildTrendImageJobPayload({
     metadata: {
       keyword: trend.keyword,
       editorialName: trend.editorialName || trend.keyword,
+      canonicalKeyword: trendConceptBrief?.canonicalKeyword || trend.keyword,
+      briefVersion: variant === "trend_concept" ? TREND_IMAGE_BRIEF_VERSION : null,
+      promptVersion: variant === "trend_concept" ? TREND_IMAGE_PROMPT_VERSION : null,
+      validationStatus: variant === "trend_concept" ? "pending_review" : null,
+      trendImageBrief: trendConceptBrief,
       outfitFormula: outfitFormula || null,
       outfitOccasion: outfitOccasion || null,
       gender: gender || null,
@@ -199,7 +221,7 @@ export async function enqueueTrendImageJob({
         entityId: trend.id,
         variant,
       });
-      if (existingConceptImage?.image_url) {
+      if (conceptImageIsCurrent(existingConceptImage)) {
         return { status: "completed" as const, image: existingConceptImage, job: null, payload };
       }
 

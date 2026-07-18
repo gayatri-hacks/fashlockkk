@@ -67,14 +67,19 @@ export function deterministicEditorialFallback(bundle: Pick<TrendEvidenceBundle,
   const craft = bundle.patternsCraftTerms[0];
   const conservativeNames: Record<string, string> = {
     cargo: "Cargo",
+    baggy: "Baggy",
+    blazer: "Blazer",
     chinos: "Chinos",
     denim: "Denim",
+    flared: "Flared",
     floral: "Floral Prints",
     graphic: "Graphic Prints",
     kurta: "Kurta",
+    leather: "Leather",
     linen: "Linen",
     maxi: "Maxi Dresses",
     mesh: "Mesh",
+    minimal: "Minimal",
     mini: "Mini",
     pleated: "Pleated",
     printed: "Printed",
@@ -96,6 +101,86 @@ export function deterministicEditorialFallback(bundle: Pick<TrendEvidenceBundle,
   if (keyword === "floral") return "Floral Prints";
   if (keyword === "knit") return "Knitwear";
   return titleCaseTrend(keyword);
+}
+
+const CANONICAL_NAME_ANCHORS: Record<string, string[]> = {
+  baggy: ["baggy"],
+  blazer: ["blazer"],
+  flared: ["flared", "flare", "bootcut"],
+  leather: ["leather", "suede"],
+  minimal: ["minimal", "minimalist"],
+  tailored: ["tailored", "tailoring"],
+  graphic: ["graphic", "screen print", "printed"],
+  floral: ["floral", "flower print"],
+  washed: ["washed", "faded"],
+  oversized: ["oversized", "oversize"],
+  loose: ["loose", "relaxed", "unstructured"],
+};
+
+const UNRELATED_CONCEPT_TERMS = [
+  "denim",
+  "shirt",
+  "pant",
+  "pants",
+  "trouser",
+  "trousers",
+  "embroidered",
+  "embroidery",
+  "cotton",
+  "leather",
+  "blazer",
+  "kurta",
+  "linen",
+  "floral",
+  "graphic",
+  "minimal",
+  "baggy",
+  "flared",
+];
+
+function normaliseNameText(value: string) {
+  return value.toLowerCase().replace(/[-_/]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function containsTerm(text: string, term: string) {
+  const normalized = normaliseNameText(text);
+  const normalizedTerm = normaliseNameText(term);
+  return normalized === normalizedTerm || normalized.includes(` ${normalizedTerm} `) || normalized.startsWith(`${normalizedTerm} `) || normalized.endsWith(` ${normalizedTerm}`);
+}
+
+export function validateEditorialNameSafety(displayName: string, bundle: Pick<TrendEvidenceBundle, "canonicalKeyword" | "rawKeywords" | "garmentCategories" | "materials" | "patternsCraftTerms" | "colors">) {
+  const canonicalKeyword = normaliseNameText(bundle.canonicalKeyword);
+  const display = normaliseNameText(displayName);
+  if (!display) return { ok: false as const, reason: "Display name is empty" };
+
+  const anchors = CANONICAL_NAME_ANCHORS[canonicalKeyword] || [canonicalKeyword, ...bundle.rawKeywords.map(normaliseNameText)];
+  const hasAnchor = anchors.some((anchor) => containsTerm(display, anchor));
+  if (!hasAnchor) {
+    return {
+      ok: false as const,
+      reason: `Display name "${displayName}" does not preserve canonical keyword "${bundle.canonicalKeyword}"`,
+    };
+  }
+
+  const trustedTerms = new Set([
+    canonicalKeyword,
+    ...anchors,
+    ...bundle.rawKeywords,
+    ...bundle.garmentCategories,
+    ...bundle.materials,
+    ...bundle.patternsCraftTerms,
+    ...bundle.colors,
+  ].map(normaliseNameText));
+
+  const unrelated = UNRELATED_CONCEPT_TERMS.filter((term) => containsTerm(display, term) && !trustedTerms.has(normaliseNameText(term)));
+  if (unrelated.length) {
+    return {
+      ok: false as const,
+      reason: `Display name contains unrelated concept terms: ${unrelated.join(", ")}`,
+    };
+  }
+
+  return { ok: true as const };
 }
 
 export function buildEditorialRefinementPrompt(bundle: TrendEvidenceBundle) {
@@ -150,6 +235,9 @@ export function validateEditorialNameResult(result: unknown, bundle: TrendEviden
   if (!hasEvidenceWord) {
     return { ok: false as const, reason: "Display name is not grounded in evidence facets" };
   }
+
+  const safety = validateEditorialNameSafety(parsed.data.display_name, bundle);
+  if (!safety.ok) return safety;
 
   return { ok: true as const, value: parsed.data };
 }

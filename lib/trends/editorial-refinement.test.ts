@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   deterministicEditorialFallback,
   evidenceHash,
+  validateEditorialNameSafety,
   validateEditorialNameResult,
   type TrendEvidenceBundle,
 } from "@/lib/trends/editorial-refinement";
@@ -52,4 +53,48 @@ test("AI validation rejects unsupported facets", () => {
   }, bundle);
 
   assert.equal(result.ok, false);
+});
+
+function contaminationBundle(canonicalKeyword: string): TrendEvidenceBundle {
+  return {
+    canonicalKeyword,
+    rawKeywords: [canonicalKeyword],
+    garmentCategories: [],
+    fitSilhouetteModifiers: [canonicalKeyword],
+    materials: [],
+    patternsCraftTerms: [],
+    colors: [],
+    productTitlePhrases: [],
+    articlePhrases: [],
+    supportingRegions: ["IN"],
+    regionBreadth: 10,
+    sourceDiversity: 1,
+    supportCounts: { product: 1, article: 0, regionalQuery: 1 },
+    evidencePeriod: "2026-07-01",
+  };
+}
+
+test("editorial-name safety prevents leather becoming Denim Shirt", () => {
+  assert.equal(validateEditorialNameSafety("Denim Shirt", contaminationBundle("leather")).ok, false);
+  assert.equal(deterministicEditorialFallback(contaminationBundle("leather")), "Leather");
+});
+
+test("editorial-name safety prevents blazer becoming Denim Denim", () => {
+  assert.equal(validateEditorialNameSafety("Denim Denim", contaminationBundle("blazer")).ok, false);
+  assert.equal(deterministicEditorialFallback(contaminationBundle("blazer")), "Blazer");
+});
+
+test("editorial-name safety prevents flared becoming Embroidered Pant", () => {
+  assert.equal(validateEditorialNameSafety("Embroidered Pant", contaminationBundle("flared")).ok, false);
+  assert.equal(deterministicEditorialFallback(contaminationBundle("flared")), "Flared");
+});
+
+test("editorial-name safety prevents baggy becoming Cotton Pant", () => {
+  assert.equal(validateEditorialNameSafety("Cotton Pant", contaminationBundle("baggy")).ok, false);
+  assert.equal(deterministicEditorialFallback(contaminationBundle("baggy")), "Baggy");
+});
+
+test("editorial-name safety prevents minimal becoming Cotton Shirt", () => {
+  assert.equal(validateEditorialNameSafety("Cotton Shirt", contaminationBundle("minimal")).ok, false);
+  assert.equal(deterministicEditorialFallback(contaminationBundle("minimal")), "Minimal");
 });
