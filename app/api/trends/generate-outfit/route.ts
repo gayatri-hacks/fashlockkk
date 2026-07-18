@@ -3,6 +3,7 @@ import {
   DEFAULT_OLLAMA_IMAGE_MODEL,
   DEFAULT_OLLAMA_IMAGE_SIZE,
   buildTrendImageJobPayload,
+  enqueueTrendImageJob,
   getGeneratedFashionImage,
 } from "@/lib/images/generated-fashion-images";
 import {
@@ -129,7 +130,35 @@ export async function POST(req: Request) {
     }
 
     if (assetContext === "trend-detail") {
-      return NextResponse.json(unavailableResponse());
+      const enqueueTrendId =
+        trendKeyword ? syntheticTrendIdForKeyword(trendKeyword) : candidateTrendIds[0];
+
+      if (enqueueTrendId) {
+        try {
+          await enqueueTrendImageJob({
+            trend: {
+              id: enqueueTrendId,
+              keyword: trendKeyword || formula,
+              editorialName: trendKeyword || outfitTitle,
+            },
+            variant,
+            outfitFormula,
+            outfitOccasion: occasion || outfitTitle,
+            gender,
+            priority: 5,
+          });
+        } catch (error) {
+          console.warn("Trend detail image enqueue skipped:", error instanceof Error ? error.message : error);
+        }
+      }
+
+      return NextResponse.json({
+        imageUrl: null,
+        imageSource: "fallback",
+        assetId: null,
+        cached: false,
+        status: "pending",
+      } satisfies OutfitResponse);
     }
 
     const fallback = await resolveTrendOutfitFallback({

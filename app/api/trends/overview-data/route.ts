@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseClient, logSupabaseFallback, supabaseCache, supabaseCacheTtl } from '@/lib/supabase'
 import { getAuthenticatedUserId } from '@/lib/supabase-auth'
 import { getLatestTrendMonth, getTopTrendingKeywords, trendVelocityLabel } from '@/lib/trend-velocity'
-import { getGeneratedFashionImagesForTrends } from '@/lib/images/generated-fashion-images'
+import { enqueueTrendImageJob, getGeneratedFashionImagesForTrends } from '@/lib/images/generated-fashion-images'
 import { syntheticTrendIdForKeyword } from '@/lib/images/build-fashion-image-prompt'
 
 export const dynamic = 'force-dynamic'
@@ -61,7 +61,7 @@ function fallbackOverviewData() {
   return { trendingTrends, cycleTrends }
 }
 
-async function attachGeneratedTrendImages<T extends { id: number; keyword?: string }>(trends: T[]) {
+async function attachGeneratedTrendImages<T extends { id: number; keyword?: string; editorialName?: string; oneLiner?: string; howToWear?: string[] }>(trends: T[]) {
   if (!trends.length) return trends
 
   const syntheticIdsByTrendId = new Map<number, number>()
@@ -80,13 +80,38 @@ async function attachGeneratedTrendImages<T extends { id: number; keyword?: stri
     ['trend_hero']
   )
 
-  return trends.map((trend) => ({
-    ...trend,
-    generatedImageUrl:
-      generatedImages.get(`${trend.id}:trend_hero`)?.image_url ||
-      generatedImages.get(`${syntheticIdsByTrendId.get(trend.id)}:trend_hero`)?.image_url ||
-      null,
-  }))
+  return Promise.all(
+    trends.map(async (trend) => {
+      const syntheticId = syntheticIdsByTrendId.get(trend.id)
+      const generatedImageUrl =
+        generatedImages.get(`${trend.id}:trend_hero`)?.image_url ||
+        generatedImages.get(`${syntheticId}:trend_hero`)?.image_url ||
+        null
+
+      if (!generatedImageUrl && trend.keyword && syntheticId) {
+        try {
+          await enqueueTrendImageJob({
+            trend: {
+              id: syntheticId,
+              keyword: trend.keyword,
+              editorialName: trend.editorialName || trend.keyword,
+              oneLiner: trend.oneLiner,
+              howToWear: trend.howToWear,
+            },
+            variant: 'trend_hero',
+            priority: 1,
+          })
+        } catch (error) {
+          console.warn('Trend hero image enqueue skipped:', error instanceof Error ? error.message : error)
+        }
+      }
+
+      return {
+        ...trend,
+        generatedImageUrl,
+      }
+    })
+  )
 }
 
 async function callGemini(prompt: string): Promise<string> {

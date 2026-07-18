@@ -113,7 +113,8 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
       .slice(0, 3)
       .filter((formula) => {
         const key = outfitImageKey(formula, gender)
-        return outfitImages[gender][key] === undefined && !outfitImageLoading[gender][key]
+        const current = outfitImages[gender][key]
+        return (current === undefined || current.status === 'pending') && !outfitImageLoading[gender][key]
       })
 
     if (!missing.length) return
@@ -248,6 +249,23 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [genderEdit, styleData?.formulas?.men])
+
+  useEffect(() => {
+    if (!formulas.length) return
+
+    const hasPendingImage = formulas
+      .slice(0, 3)
+      .some((formula) => outfitImages[genderEdit][outfitImageKey(formula, genderEdit)]?.status === 'pending')
+
+    if (!hasPendingImage) return
+
+    const timer = window.setInterval(() => {
+      loadOutfitImages(formulas, genderEdit)
+    }, 10000)
+
+    return () => window.clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formulas, genderEdit, outfitImages])
 
   return (
     <div style={{ backgroundColor: '#FAF7F4', minHeight: '100vh' }}>
@@ -393,9 +411,12 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
               const imageResult = outfitImages[genderEdit][key]
               const imageUrl = imageResult?.imageUrl
               const isImageLoading = outfitImageLoading[genderEdit][key] || imageResult === undefined
-              const imageRejected = imageUrl === null && !isImageLoading
+              const isImagePending = imageResult?.status === 'pending'
+              const imageRejected = imageUrl === null && !isImageLoading && !isImagePending
               const sourceLabel =
-                imageResult?.source === 'ollama' || imageResult?.source === 'gemini'
+                isImagePending
+                  ? ''
+                  : imageResult?.source === 'ollama' || imageResult?.source === 'gemini'
                   ? 'Generated for this outfit'
                   : imageResult?.source
                     ? imageResult.source.replace('_', ' ')
@@ -441,7 +462,7 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
                       <div style={{ width: '100%', height: '100%', backgroundColor: '#E8E0D4', animation: 'stylePulse 1.6s infinite' }} />
                     )}
 
-                    {(isImageLoading || sourceLabel) && (
+                    {(isImageLoading || isImagePending || sourceLabel) && (
                       <div
                         style={{
                           position: 'absolute',
@@ -458,11 +479,11 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
                           textTransform: 'uppercase',
                         }}
                       >
-                        {isImageLoading ? preparingLabel : sourceLabel}
+                        {isImageLoading || isImagePending ? preparingLabel : sourceLabel}
                       </div>
                     )}
 
-                    {isImageLoading && !imageUrl && (
+                    {(isImageLoading || isImagePending) && !imageUrl && (
                         <div
                           style={{
                             position: 'absolute',
