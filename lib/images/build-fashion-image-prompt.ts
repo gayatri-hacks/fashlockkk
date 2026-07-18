@@ -14,10 +14,12 @@ export type TrendConceptCategory =
 export type TrendConceptCompositionMode =
   | "macro texture"
   | "top-down flat-lay"
+  | "suspended garment"
   | "suspended fabric"
   | "sculptural draping"
   | "cropped construction detail"
-  | "architectural product still-life";
+  | "architectural product still-life"
+  | "asymmetric garment arrangement";
 
 export type FashionImagePromptInput = {
   entityType: FashionImageEntityType;
@@ -78,10 +80,19 @@ const CONCEPT_CATEGORY_TERMS: Record<TrendConceptCategory, string[]> = {
     "tweed",
     "mesh",
     "sheer",
+    "chikankari",
+    "kantha",
+    "zardozi",
+    "handloom",
   ],
   garment: [
     "trench",
     "kurta",
+    "sari",
+    "saree",
+    "lehenga",
+    "dupatta",
+    "anarkali",
     "blazer",
     "corset",
     "polo",
@@ -194,23 +205,47 @@ function isKurtaConcept(keyword: string) {
   return matchesAnyConceptTerm(keyword, ["kurta"]);
 }
 
+function keywordColourPalette(keyword: string) {
+  const normalizedKeyword = normalizedSearchText(keyword);
+  const colourTerms = CONCEPT_CATEGORY_TERMS.colour.map((term) => normalizedSearchText(term));
+  const matchingColour = colourTerms.find((term) => normalizedKeyword === term);
+  if (!matchingColour) return null;
+
+  return `Palette family: nuanced tonal variations of ${keyword}, sophisticated and fashion-relevant rather than randomly bright.`;
+}
+
+function isIndianConcept(keyword: string) {
+  return matchesAnyConceptTerm(keyword, [
+    "kurta",
+    "sari",
+    "saree",
+    "lehenga",
+    "dupatta",
+    "anarkali",
+    "chikankari",
+    "kantha",
+    "zardozi",
+    "handloom",
+  ]);
+}
+
 function conceptCompositionMode(category: TrendConceptCategory, keyword: string): TrendConceptCompositionMode {
   const normalizedKeyword = normalizedSearchText(keyword);
 
   if (isLooseConcept(normalizedKeyword) || matchesAnyConceptTerm(normalizedKeyword, ["oversized", "slouchy"])) {
-    return "suspended fabric";
+    return "suspended garment";
   }
   if (isKurtaConcept(normalizedKeyword)) {
     return "cropped construction detail";
   }
 
   const categoryModes: Record<TrendConceptCategory, TrendConceptCompositionMode[]> = {
-    silhouette_or_fit: ["suspended fabric", "sculptural draping", "architectural product still-life"],
+    silhouette_or_fit: ["suspended garment", "sculptural draping", "asymmetric garment arrangement"],
     fabric_or_craft: ["macro texture", "cropped construction detail", "top-down flat-lay"],
-    garment: ["cropped construction detail", "architectural product still-life", "top-down flat-lay"],
+    garment: ["cropped construction detail", "architectural product still-life", "asymmetric garment arrangement"],
     pattern_or_print: ["macro texture", "sculptural draping", "top-down flat-lay"],
     colour: ["top-down flat-lay", "suspended fabric", "sculptural draping"],
-    aesthetic_or_mood: ["architectural product still-life", "top-down flat-lay", "sculptural draping"],
+    aesthetic_or_mood: ["architectural product still-life", "top-down flat-lay", "asymmetric garment arrangement"],
   };
   const modes = categoryModes[category];
   return modes[deterministicConceptIndex(keyword, "trend-concept-composition", modes.length)];
@@ -221,7 +256,9 @@ function conceptCompositionDirection(mode: TrendConceptCompositionMode) {
     "macro texture":
       "Composition mode: macro texture. Use a close camera, shallow depth of field and tactile surface detail so the material fills the frame with varied focus.",
     "top-down flat-lay":
-      "Composition mode: top-down flat-lay. Arrange garments, fabric swatches or construction details from above with refined negative space and a deliberate magazine layout.",
+      "Composition mode: top-down flat-lay. Arrange garments, fabric swatches or construction details from above with refined negative space and an intentional product-photography layout.",
+    "suspended garment":
+      "Composition mode: suspended garment. Let a recognizable garment hang, float or arc through the frame with visible air, movement and asymmetry.",
     "suspended fabric":
       "Composition mode: suspended fabric. Let fabric hang, float or arc through the frame with visible air, movement and asymmetry instead of a static centred garment.",
     "sculptural draping":
@@ -230,6 +267,8 @@ function conceptCompositionDirection(mode: TrendConceptCompositionMode) {
       "Composition mode: cropped construction detail. Frame the neckline, placket, seam, button, pocket, hem, weave or closure closely so craftsmanship becomes the subject.",
     "architectural product still-life":
       "Composition mode: architectural product still-life. Stage the garment or detail with structured shadows, clean planes and a premium product-photography sense of form.",
+    "asymmetric garment arrangement":
+      "Composition mode: asymmetric garment arrangement. Place the garment off-centre with deliberate negative space, angled folds and an editorial still-life sense of movement.",
   };
 
   return directions[mode];
@@ -237,42 +276,47 @@ function conceptCompositionDirection(mode: TrendConceptCompositionMode) {
 
 function trendConceptColourFamily(category: TrendConceptCategory, keyword: string) {
   const normalizedKeyword = normalizedSearchText(keyword);
+  const colourOverride = keywordColourPalette(keyword);
+  if (colourOverride) return colourOverride;
 
   if (isLooseConcept(normalizedKeyword) || matchesAnyConceptTerm(normalizedKeyword, ["oversized", "slouchy", "baggy", "relaxed fit"])) {
-    return "Colour family: cool white, mist grey and pale blue-grey, with airy highlights and no beige-on-beige styling.";
+    return "Palette family: cool white, mist grey and pale blue-grey, with airy highlights and no beige-on-beige styling.";
   }
   if (matchesAnyConceptTerm(normalizedKeyword, ["embroidered", "embroidery", "crochet", "lace", "knitted", "knit", "tweed"])) {
-    return "Colour family: multicolour craft detail or restrained jewel tones on a sophisticated textile base.";
+    return "Palette family: multicolour threadwork, restrained jewel colours or material-specific craft colours on a sophisticated textile base.";
   }
   if (matchesAnyConceptTerm(normalizedKeyword, ["trench", "coat", "outerwear"])) {
-    return "Colour family: camel, olive or stone outerwear tones against a contrasting backdrop, not a flat matching beige wall.";
+    return "Palette family: camel, olive, navy, charcoal or stone outerwear tones against a contrasting backdrop, not a flat matching beige wall.";
   }
-  if (isKurtaConcept(normalizedKeyword)) {
-    return "Colour family: deep indigo, muted maroon, forest green, restrained saffron or natural handloom tones, elegant and Indian-inspired.";
+  if (isIndianConcept(normalizedKeyword)) {
+    return "Palette family: deep indigo, muted maroon, forest green, restrained saffron or natural handloom tones, elegant and Indian-inspired.";
   }
   if (matchesAnyConceptTerm(normalizedKeyword, ["denim", "jeans"])) {
-    return "Colour family: indigo, washed blue, rinsed denim and authentic twill variation.";
+    return "Palette family: indigo, washed blue, rinsed denim and authentic twill variation.";
   }
   if (matchesAnyConceptTerm(normalizedKeyword, ["leather", "suede"])) {
-    return "Colour family: black, oxblood, espresso brown or dark tan leather with controlled highlights.";
+    return "Palette family: black, oxblood, dark brown or natural leather tones with controlled highlights.";
   }
   if (matchesAnyConceptTerm(normalizedKeyword, ["y2k", "colour blocking", "color blocking", "cobalt", "cherry red", "graphic"])) {
-    return "Colour family: brighter and higher-contrast fashion palettes, balanced with premium restraint.";
+    return "Palette family: higher-contrast and more energetic fashion palettes, balanced with premium restraint.";
   }
   if (matchesAnyConceptTerm(normalizedKeyword, ["quiet luxury", "old money", "minimal", "tailored"])) {
-    return "Colour family: restrained cream, chocolate, navy, charcoal or soft black with expensive tonal contrast.";
+    return "Palette family: restrained cream, chocolate, charcoal, navy or stone with expensive tonal contrast.";
+  }
+  if (category === "pattern_or_print") {
+    return `Palette family: fashion-relevant colours that clearly reveal the ${keyword} pattern, with enough contrast to make the repeat readable.`;
   }
   if (category === "silhouette_or_fit") {
-    return "Colour family: cool whites, mist grey, pale blue or soft charcoal chosen to make shape and movement readable.";
+    return "Palette family: cool white, mist grey, pale blue-grey or another airy relevant palette chosen to make shape and movement readable.";
   }
   if (category === "colour") {
-    return `Colour family: nuanced tonal variations of ${keyword}, sophisticated and fashion-relevant rather than randomly bright.`;
+    return `Palette family: nuanced tonal variations of ${keyword}, sophisticated and fashion-relevant rather than randomly bright.`;
   }
 
   const fallbackFamilies = [
-    "Colour family: smoky ivory, slate, muted rose and soft black accents.",
-    "Colour family: olive, stone, ink blue and natural canvas neutrals.",
-    "Colour family: chocolate, charcoal, restrained cream and muted metallic shadows.",
+    "Palette family: smoky ivory, slate, muted rose and soft black accents.",
+    "Palette family: olive, stone, ink blue and natural canvas neutrals.",
+    "Palette family: chocolate, charcoal, restrained cream and muted metallic shadows.",
   ];
   return fallbackFamilies[deterministicConceptIndex(keyword, "trend-concept-colour", fallbackFamilies.length)];
 }
@@ -281,45 +325,47 @@ function trendConceptDirection(category: TrendConceptCategory, keyword: string) 
   const normalizedKeyword = normalizedSearchText(keyword);
 
   if (isLooseConcept(normalizedKeyword)) {
-    return "Show a recognisably loose fashion garment: an oversized lightweight white button-down shirt or unstructured tunic photographed without a person. Make the collar, button placket, cuffs, extra-wide body and flowing sleeves clearly visible. Suspend or drape it asymmetrically so it communicates air, freedom, movement and loose volume. Use a cool white, mist-grey and very pale blue-grey palette. It must not resemble a bedsheet, curtain, hammock or interior textile.";
+    return "Subject treatment: Show a recognisably loose fashion garment: an oversized lightweight button-down shirt or unstructured tunic photographed without a person. Keep the collar, button placket, cuffs, extra-wide body and flowing sleeves clearly visible. Suspend or drape it asymmetrically so it communicates air, freedom, movement and loose volume. It must not resemble a bedsheet, curtain, hammock or interior textile.";
   }
   if (isKurtaConcept(normalizedKeyword)) {
-    return `Create a close editorial study of a kurta neckline, placket, weave, buttons and fabric surface. Show Indian garment construction and material richness without another full beige garment hanging against a neutral wall.`;
+    return `Subject treatment: Create a close editorial study of a kurta neckline, placket, weave, buttons and fabric surface. Show Indian garment construction and material richness without another full beige garment hanging against a neutral wall.`;
   }
   if (matchesAnyConceptTerm(normalizedKeyword, ["oversized", "slouchy"])) {
-    return `Create an airy study of ${keyword} using excess drape, soft volume and flowing cloth in motion. Use an asymmetrical or suspended composition with visible negative space, not a beige garment against a beige wall.`;
+    return `Subject treatment: Create an airy study of ${keyword} using excess drape, soft volume and flowing cloth in motion. Use an asymmetrical or suspended composition with visible negative space, not a beige garment against a beige wall.`;
   }
   if (category === "silhouette_or_fit") {
-    return `Create a sculptural garment composition, ghost form or carefully draped garment that emphasizes the proportion, volume and shape of ${keyword}. Use negative space to make the silhouette instantly readable.`;
+    return `Subject treatment: Create a sculptural garment composition, ghost form or carefully draped garment that emphasizes the proportion, volume and shape of ${keyword}. Use negative space to make the silhouette instantly readable.`;
   }
   if (category === "fabric_or_craft") {
-    return `Create a macro or close editorial study of ${keyword} texture, stitches, weave, embellishment and construction. Show tactile material detail with crisp focus and rich surface depth.`;
+    return `Subject treatment: Create a macro or close editorial study of ${keyword} texture, stitches, weave, embellishment and construction. Show tactile material detail with crisp focus and rich surface depth.`;
   }
   if (category === "garment") {
-    return `Create an elevated product still-life or cropped study of the garment's most recognizable construction details for ${keyword}. Focus on seams, closures, lapels, plackets, hems, buttons, folds or hardware. Do not show a complete styled outfit.`;
+    return `Subject treatment: Create an elevated product still-life or cropped study of the garment's most recognizable construction details for ${keyword}. Focus on seams, closures, lapels, plackets, hems, buttons, folds or hardware. Do not show a complete styled outfit.`;
   }
   if (category === "pattern_or_print") {
-    return `Create a refined close-up or sculptural arrangement emphasizing the repeating ${keyword} pattern. Make the rhythm, scale and placement of the print the main subject.`;
+    return `Subject treatment: Create a refined close-up or sculptural arrangement emphasizing the repeating ${keyword} pattern. Make the rhythm, scale and placement of the print the main subject.`;
   }
   if (category === "colour") {
-    return `Create a monochromatic editorial composition using folded fabrics, fashion materials and subtle objects in the ${keyword} colour family. Keep the palette nuanced, premium and tonal.`;
+    return `Subject treatment: Create a monochromatic editorial composition using folded fabrics, fashion materials and subtle objects in the ${keyword} colour family. Keep the palette nuanced, premium and tonal.`;
   }
-  return `Create a fashion-editorial still-life using garment fragments, materials and a small number of relevant objects to communicate the ${keyword} aesthetic. Avoid generic lifestyle stock photography.`;
+  return `Subject treatment: Create an editorial fashion product still-life using garment fragments, materials and a small number of relevant objects to communicate the ${keyword} aesthetic. Avoid generic lifestyle stock photography.`;
 }
+
+const TREND_CONCEPT_ANTI_TEXT =
+  "Create only an edge-to-edge fashion photograph. No poster layout, no magazine page, no footer, no caption area, no title bar, no border, no graphic panel, no typography, no letters, no numbers, no symbols, no imitation writing, no label, no watermark, no logo and no brand marks anywhere in the image. The website will add all interface text separately.";
 
 function buildTrendConceptImagePrompt(input: FashionImagePromptInput) {
   const keyword = input.keyword.trim() || input.editorialName?.trim() || "fashion trend";
   const category = classifyTrendConceptCategory(keyword, input.editorialName);
   const compositionMode = conceptCompositionMode(category, keyword);
   const normalizedKeyword = normalizedSearchText(keyword);
-  const isLooseOrKurta = isLooseConcept(normalizedKeyword) || isKurtaConcept(normalizedKeyword);
 
   return [
     `Editorial fashion concept photograph representing the trend keyword "${keyword}".`,
     "",
     trendConceptDirection(category, keyword),
     isKurtaConcept(normalizedKeyword)
-      ? "Create only an edge-to-edge fashion product photograph. Fill the entire frame with the kurta fabric and construction details. No poster layout, no magazine page, no footer, no caption area, no border, no graphic panel, no typography, no letters, no symbols and no imitation writing anywhere in the image."
+      ? "Fill the entire frame with the kurta fabric and construction details."
       : "",
     "",
     conceptCompositionDirection(compositionMode),
@@ -327,15 +373,12 @@ function buildTrendConceptImagePrompt(input: FashionImagePromptInput) {
     "",
     `The image must clearly communicate ${keyword} through shape, proportion, texture, construction, pattern, colour or visual mood rather than through a person wearing an outfit.`,
     "",
-    isLooseOrKurta
-      ? "Premium editorial fashion product photography, photorealistic materials, soft editorial lighting, subtle realistic shadows, elegant styling and sophisticated composition. Allow the backdrop, palette and composition to vary by trend while staying premium."
-      : "Premium luxury fashion-magazine art direction, photorealistic materials, soft editorial lighting, subtle realistic shadows, elegant styling and sophisticated composition. Allow the backdrop, palette and composition to vary by trend while staying premium.",
+    "Premium editorial fashion product photography, photorealistic materials, soft editorial lighting, subtle realistic shadows, elegant styling and sophisticated composition. Allow the backdrop, palette and composition to vary by trend while staying premium.",
     "",
-    isLooseOrKurta
-      ? "Vertical 4:5 edge-to-edge product photograph with consistent premium framing. Avoid poster design, labels, caption zones, borders and empty graphic panels."
-      : "Vertical 4:5 image designed for a fashion trend card. Keep the lower portion visually calm enough for the card's title overlay, but avoid making every subject a centred garment on a neutral studio wall.",
+    "Vertical 4:5 edge-to-edge product photograph with consistent premium framing. Keep the lower portion visually calm enough for the website overlay when possible, but never create a built-in text area or graphic panel.",
     "",
-    "No person, no face, no body, no complete styled outfit, no runway scene, no text, no letters, no watermark, no logo, no brand marks, no collage and no product-advertisement layout.",
+    TREND_CONCEPT_ANTI_TEXT,
+    "No person, no face, no body, no complete styled outfit, no runway scene, no collage and no product-advertisement layout.",
   ]
     .filter(Boolean)
     .join("\n");

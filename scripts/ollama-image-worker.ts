@@ -23,6 +23,7 @@ const ollamaBaseUrl = (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434").
 const pollMs = Number(process.env.IMAGE_WORKER_POLL_MS || 5000);
 const timeoutMs = Number(process.env.IMAGE_WORKER_TIMEOUT_MS || 300000);
 const bucketName = "generated-fashion-images";
+const webpQuality = Number(process.env.IMAGE_WORKER_WEBP_QUALITY || 82);
 
 let stopping = false;
 
@@ -72,7 +73,7 @@ async function claimJob() {
 async function ensureBucket() {
   const bucketOptions = {
     public: true,
-    allowedMimeTypes: ["image/png"],
+    allowedMimeTypes: ["image/png", "image/webp"],
   };
   const { error } = await supabase.storage.createBucket(bucketName, bucketOptions);
 
@@ -83,6 +84,44 @@ async function ensureBucket() {
   const { error: updateError } = await supabase.storage.updateBucket(bucketName, bucketOptions);
   if (updateError) {
     console.warn(`Bucket update skipped: ${updateError.message}`);
+  }
+}
+
+function replaceStorageExtension(storagePath: string, extension: "png" | "webp") {
+  return storagePath.replace(/\.[^.]+$/, `.${extension}`);
+}
+
+async function encodeUploadImage(job: ImageGenerationJob, imageBuffer: Buffer) {
+  if (job.variant !== "trend_concept") {
+    return {
+      buffer: imageBuffer,
+      contentType: "image/png",
+      extension: "png" as const,
+    };
+  }
+
+  try {
+    const sharp = (await import("sharp")).default;
+    const webpBuffer = await sharp(imageBuffer)
+      .rotate()
+      .resize({ width: 1024, height: 1280, fit: "inside", withoutEnlargement: true })
+      .webp({ quality: webpQuality })
+      .toBuffer();
+
+    return {
+      buffer: webpBuffer,
+      contentType: "image/webp",
+      extension: "webp" as const,
+    };
+  } catch (error) {
+    console.warn(
+      `WebP conversion skipped for job ${job.id}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return {
+      buffer: imageBuffer,
+      contentType: "image/png",
+      extension: "png" as const,
+    };
   }
 }
 
@@ -133,17 +172,21 @@ async function markFailed(job: ImageGenerationJob, error: unknown) {
 
 async function processJob(job: ImageGenerationJob) {
   const imageBuffer = await generateImage(job);
+  const uploadImage = await encodeUploadImage(job, imageBuffer);
   const storagePath =
-    job.storage_path ||
-    storagePathForFashionImage({
-      entityId: Number(job.entity_id),
-      variant: job.variant,
-      promptHash: job.prompt_hash,
-    });
+    replaceStorageExtension(
+      job.storage_path ||
+        storagePathForFashionImage({
+          entityId: Number(job.entity_id),
+          variant: job.variant,
+          promptHash: job.prompt_hash,
+        }),
+      uploadImage.extension,
+    );
 
-  const { error: uploadError } = await supabase.storage.from(bucketName).upload(storagePath, imageBuffer, {
+  const { error: uploadError } = await supabase.storage.from(bucketName).upload(storagePath, uploadImage.buffer, {
     cacheControl: "31536000",
-    contentType: "image/png",
+    contentType: uploadImage.contentType,
     upsert: true,
   });
 
@@ -161,6 +204,7 @@ async function processJob(job: ImageGenerationJob) {
       workerId,
       completedBy: "ollama",
       ollamaBaseUrl,
+      contentType: uploadImage.contentType,
     },
   });
 

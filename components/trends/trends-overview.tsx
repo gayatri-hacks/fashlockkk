@@ -139,6 +139,7 @@ export default function TrendsOverview({ initialSearchQuery = '', onTrendClick, 
   const [cycleTrends, setCycleTrends] = useState<TrendData[]>([])
   const [trendingForYou, setTrendingForYou] = useState<PersonalizedTrendNote[]>([])
   const [loading, setLoading] = useState(true)
+  const featuredTrendIds = trendingTrends.slice(0, 6).map((trend) => trend.id)
 
   useEffect(() => {
     const loadTrends = async () => {
@@ -168,7 +169,7 @@ export default function TrendsOverview({ initialSearchQuery = '', onTrendClick, 
       <TrendingForYou notes={trendingForYou} />
       <TrendsHero initialQuery={initialSearchQuery} onTrendSearch={onTrendSearch} />
       <TrendingNow trends={trendingTrends} loading={loading} onTrendClick={onTrendClick} />
-      <TheCycle trends={cycleTrends} loading={loading} onTrendClick={onTrendClick} />
+      <TheCycle trends={cycleTrends} loading={loading} featuredTrendIds={featuredTrendIds} onTrendClick={onTrendClick} />
     </div>
   )
 }

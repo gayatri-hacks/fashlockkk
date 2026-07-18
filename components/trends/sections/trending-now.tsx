@@ -13,6 +13,8 @@ function trendAnchorId(id: number) {
   return `trend-card-${id}`
 }
 
+const SKELETON_KEYS = ['featured-look-01', 'featured-look-02', 'featured-look-03', 'featured-look-04', 'featured-look-05', 'featured-look-06']
+
 function SkeletonCard() {
   return (
     <div
@@ -66,7 +68,7 @@ export default function TrendingNow({ trends, loading, onTrendClick }: TrendingN
         }}
       >
         {loading
-          ? Array.from({ length: 6 }).map((_, index) => <SkeletonCard key={index} />)
+          ? SKELETON_KEYS.map((key) => <SkeletonCard key={key} />)
           : visibleTrends.map((trend, index) => (
               <TrendImageCard
                 key={trend.id}

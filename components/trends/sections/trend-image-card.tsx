@@ -1,5 +1,6 @@
 'use client'
 
+import Image from 'next/image'
 import { TrendData } from '@/app/trends/page'
 import { rankLookLibrary } from '@/lib/look-library'
 
@@ -7,6 +8,8 @@ type TrendImageCardProps = {
   trend: TrendData
   index: number
   anchorId?: string
+  imagePriority?: boolean
+  metadataMode?: 'stage-market' | 'market'
   onTrendClick: (trend: TrendData) => void
 }
 
@@ -49,12 +52,27 @@ function cardImageForTrend(trend: TrendData, index: number) {
 
 function primaryMarket(trend: TrendData) {
   const market = trend.topMarkets?.[0]
-  return market?.code || market?.market || 'GLOBAL'
+  return market?.code || market?.market || 'Global'
 }
 
-export default function TrendImageCard({ trend, index, anchorId, onTrendClick }: TrendImageCardProps) {
-  const imageUrl = cardImageForTrend(trend, index)
+function metadataForTrend(trend: TrendData, mode: TrendImageCardProps['metadataMode']) {
+  const market = primaryMarket(trend)
+  if (mode === 'market') return market
+
   const stage = titleCase(trend.velocity.toLowerCase())
+  return `${stage} · ${market}`
+}
+
+export default function TrendImageCard({
+  trend,
+  index,
+  anchorId,
+  imagePriority = false,
+  metadataMode = 'stage-market',
+  onTrendClick,
+}: TrendImageCardProps) {
+  const imageUrl = cardImageForTrend(trend, index)
+  const metadata = metadataForTrend(trend, metadataMode)
 
   return (
     <article
@@ -80,16 +98,15 @@ export default function TrendImageCard({ trend, index, anchorId, onTrendClick }:
         event.currentTarget.style.boxShadow = '0 0 0 rgba(44,36,24,0)'
       }}
     >
-      <img
+      <Image
         src={imageUrl}
         alt={`${trend.editorialName} trend concept`}
-        loading="lazy"
+        fill
+        priority={imagePriority}
+        sizes="(min-width: 1280px) 18vw, (min-width: 900px) 30vw, (min-width: 640px) 45vw, 92vw"
         style={{
-          display: 'block',
-          height: '100%',
           objectFit: 'cover',
           objectPosition: 'center top',
-          width: '100%',
         }}
       />
 
@@ -149,10 +166,10 @@ export default function TrendImageCard({ trend, index, anchorId, onTrendClick }:
             letterSpacing: '0.05em',
             lineHeight: 1.4,
             margin: '7px 0 0',
-            textTransform: 'uppercase',
+            textTransform: metadataMode === 'stage-market' ? 'uppercase' : 'none',
           }}
         >
-          {stage} · {primaryMarket(trend)}
+          {metadata}
         </p>
       </div>
     </article>
