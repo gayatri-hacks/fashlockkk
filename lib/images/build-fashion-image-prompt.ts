@@ -186,13 +186,21 @@ function matchesAnyConceptTerm(keyword: string, terms: string[]) {
   return terms.some((term) => includesConceptTerm(searchText, term));
 }
 
+function isLooseConcept(keyword: string) {
+  return matchesAnyConceptTerm(keyword, ["loose"]);
+}
+
+function isKurtaConcept(keyword: string) {
+  return matchesAnyConceptTerm(keyword, ["kurta"]);
+}
+
 function conceptCompositionMode(category: TrendConceptCategory, keyword: string): TrendConceptCompositionMode {
   const normalizedKeyword = normalizedSearchText(keyword);
 
-  if (matchesAnyConceptTerm(normalizedKeyword, ["loose", "oversized", "slouchy"])) {
+  if (isLooseConcept(normalizedKeyword) || matchesAnyConceptTerm(normalizedKeyword, ["oversized", "slouchy"])) {
     return "suspended fabric";
   }
-  if (matchesAnyConceptTerm(normalizedKeyword, ["kurta"])) {
+  if (isKurtaConcept(normalizedKeyword)) {
     return "cropped construction detail";
   }
 
@@ -230,7 +238,7 @@ function conceptCompositionDirection(mode: TrendConceptCompositionMode) {
 function trendConceptColourFamily(category: TrendConceptCategory, keyword: string) {
   const normalizedKeyword = normalizedSearchText(keyword);
 
-  if (matchesAnyConceptTerm(normalizedKeyword, ["loose", "oversized", "slouchy", "baggy", "relaxed fit"])) {
+  if (isLooseConcept(normalizedKeyword) || matchesAnyConceptTerm(normalizedKeyword, ["oversized", "slouchy", "baggy", "relaxed fit"])) {
     return "Colour family: cool white, mist grey and pale blue-grey, with airy highlights and no beige-on-beige styling.";
   }
   if (matchesAnyConceptTerm(normalizedKeyword, ["embroidered", "embroidery", "crochet", "lace", "knitted", "knit", "tweed"])) {
@@ -239,7 +247,7 @@ function trendConceptColourFamily(category: TrendConceptCategory, keyword: strin
   if (matchesAnyConceptTerm(normalizedKeyword, ["trench", "coat", "outerwear"])) {
     return "Colour family: camel, olive or stone outerwear tones against a contrasting backdrop, not a flat matching beige wall.";
   }
-  if (matchesAnyConceptTerm(normalizedKeyword, ["kurta"])) {
+  if (isKurtaConcept(normalizedKeyword)) {
     return "Colour family: deep indigo, muted maroon, forest green, restrained saffron or natural handloom tones, elegant and Indian-inspired.";
   }
   if (matchesAnyConceptTerm(normalizedKeyword, ["denim", "jeans"])) {
@@ -272,11 +280,14 @@ function trendConceptColourFamily(category: TrendConceptCategory, keyword: strin
 function trendConceptDirection(category: TrendConceptCategory, keyword: string) {
   const normalizedKeyword = normalizedSearchText(keyword);
 
-  if (matchesAnyConceptTerm(normalizedKeyword, ["loose", "oversized", "slouchy"])) {
-    return `Create an airy study of ${keyword} using excess drape, soft volume and flowing cloth in motion. Use an asymmetrical or suspended composition with visible negative space, not a beige garment against a beige wall.`;
+  if (isLooseConcept(normalizedKeyword)) {
+    return "Show a recognisably loose fashion garment: an oversized lightweight white button-down shirt or unstructured tunic photographed without a person. Make the collar, button placket, cuffs, extra-wide body and flowing sleeves clearly visible. Suspend or drape it asymmetrically so it communicates air, freedom, movement and loose volume. Use a cool white, mist-grey and very pale blue-grey palette. It must not resemble a bedsheet, curtain, hammock or interior textile.";
   }
-  if (matchesAnyConceptTerm(normalizedKeyword, ["kurta"])) {
+  if (isKurtaConcept(normalizedKeyword)) {
     return `Create a close editorial study of a kurta neckline, placket, weave, buttons and fabric surface. Show Indian garment construction and material richness without another full beige garment hanging against a neutral wall.`;
+  }
+  if (matchesAnyConceptTerm(normalizedKeyword, ["oversized", "slouchy"])) {
+    return `Create an airy study of ${keyword} using excess drape, soft volume and flowing cloth in motion. Use an asymmetrical or suspended composition with visible negative space, not a beige garment against a beige wall.`;
   }
   if (category === "silhouette_or_fit") {
     return `Create a sculptural garment composition, ghost form or carefully draped garment that emphasizes the proportion, volume and shape of ${keyword}. Use negative space to make the silhouette instantly readable.`;
@@ -300,23 +311,34 @@ function buildTrendConceptImagePrompt(input: FashionImagePromptInput) {
   const keyword = input.keyword.trim() || input.editorialName?.trim() || "fashion trend";
   const category = classifyTrendConceptCategory(keyword, input.editorialName);
   const compositionMode = conceptCompositionMode(category, keyword);
+  const normalizedKeyword = normalizedSearchText(keyword);
+  const isLooseOrKurta = isLooseConcept(normalizedKeyword) || isKurtaConcept(normalizedKeyword);
 
   return [
     `Editorial fashion concept photograph representing the trend keyword "${keyword}".`,
     "",
     trendConceptDirection(category, keyword),
+    isKurtaConcept(normalizedKeyword)
+      ? "Create only an edge-to-edge fashion product photograph. Fill the entire frame with the kurta fabric and construction details. No poster layout, no magazine page, no footer, no caption area, no border, no graphic panel, no typography, no letters, no symbols and no imitation writing anywhere in the image."
+      : "",
     "",
     conceptCompositionDirection(compositionMode),
     trendConceptColourFamily(category, keyword),
     "",
     `The image must clearly communicate ${keyword} through shape, proportion, texture, construction, pattern, colour or visual mood rather than through a person wearing an outfit.`,
     "",
-    "Premium luxury fashion-magazine art direction, photorealistic materials, soft editorial lighting, subtle realistic shadows, elegant styling and sophisticated composition. Allow the backdrop, palette and composition to vary by trend while staying premium.",
+    isLooseOrKurta
+      ? "Premium editorial fashion product photography, photorealistic materials, soft editorial lighting, subtle realistic shadows, elegant styling and sophisticated composition. Allow the backdrop, palette and composition to vary by trend while staying premium."
+      : "Premium luxury fashion-magazine art direction, photorealistic materials, soft editorial lighting, subtle realistic shadows, elegant styling and sophisticated composition. Allow the backdrop, palette and composition to vary by trend while staying premium.",
     "",
-    "Vertical 4:5 image designed for a fashion trend card. Keep the lower portion visually calm enough for the card's title overlay, but avoid making every subject a centred garment on a neutral studio wall.",
+    isLooseOrKurta
+      ? "Vertical 4:5 edge-to-edge product photograph with consistent premium framing. Avoid poster design, labels, caption zones, borders and empty graphic panels."
+      : "Vertical 4:5 image designed for a fashion trend card. Keep the lower portion visually calm enough for the card's title overlay, but avoid making every subject a centred garment on a neutral studio wall.",
     "",
     "No person, no face, no body, no complete styled outfit, no runway scene, no text, no letters, no watermark, no logo, no brand marks, no collage and no product-advertisement layout.",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function variantDirection(variant: FashionImageVariant) {
