@@ -6,10 +6,12 @@ export const SUPPORTED_TREND_REGIONS = [
   { code: "GB", market: "United Kingdom", leadMarket: true },
   { code: "FR", market: "France", leadMarket: true },
   { code: "IT", market: "Italy", leadMarket: true },
+  { code: "DE", market: "Germany", leadMarket: true },
   { code: "JP", market: "Japan", leadMarket: true },
   { code: "KR", market: "Korea", leadMarket: true },
   { code: "AU", market: "Australia", leadMarket: false },
   { code: "BR", market: "Brazil", leadMarket: false },
+  { code: "SG", market: "Singapore", leadMarket: false },
   { code: "AE", market: "UAE", leadMarket: false },
 ] as const;
 

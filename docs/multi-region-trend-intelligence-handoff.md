@@ -118,7 +118,7 @@ Output is validated with Zod and rejected if it uses unsupported facets. Evidenc
 - `MAX_AI_TRENDS_PER_RUN=8`: conservative default.
 - `TREND_PIPELINE_SECRET` or `CRON_SECRET`: required for `/api/cron/recompute-trends`.
 - `AUTO_ENQUEUE_TREND_IMAGES_ENABLED=true`: optional page-view image enqueue; default is off.
-- `TREND_MARKETS=IN,US,GB,FR,IT,JP,KR,AU,BR,AE`: optional scraper region override.
+- `TREND_MARKETS=IN,US,GB,FR,IT,DE,JP,KR,AU,BR,SG,AE`: optional scraper region override.
 - `FASHLOCK_PRODUCTION_URL=https://fashlockkk.vercel.app`: required by the GitHub Actions scheduler for the revalidate-only cron route.
 
 ## Permanent Scheduler
@@ -162,7 +162,7 @@ Required GitHub secrets:
 
 Optional repository variable:
 
-- `TREND_MARKETS` defaults to `IN,US,GB,FR,IT,JP,KR,AU,BR,AE`.
+- `TREND_MARKETS` defaults to `IN,US,GB,FR,IT,DE,JP,KR,AU,BR,SG,AE`.
 
 ## Commands
 

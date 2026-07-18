@@ -13,7 +13,7 @@ logger = logging.getLogger("global-trends")
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 
-DEFAULT_MARKETS = ['IN', 'US', 'GB', 'FR', 'IT', 'JP', 'KR', 'AU', 'BR', 'AE']
+DEFAULT_MARKETS = ['IN', 'US', 'GB', 'FR', 'IT', 'DE', 'JP', 'KR', 'AU', 'BR', 'SG', 'AE']
 MARKETS = [market.strip().upper() for market in os.getenv("TREND_MARKETS", ",".join(DEFAULT_MARKETS)).split(",") if market.strip()]
 
 CHUNKS = [
