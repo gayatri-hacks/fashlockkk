@@ -29,7 +29,7 @@ function titleCase(value: string) {
     .join(' ')
 }
 
-function lookImageForTrend(trend: TrendData, index: number) {
+function fallbackLookImageForTrend(trend: TrendData, index: number) {
   const ranked = rankLookLibrary({
     trendDrivers: [
       trend.keyword,
@@ -43,13 +43,17 @@ function lookImageForTrend(trend: TrendData, index: number) {
   return ranked[0]?.heroImage || FALLBACK_LOOKS[index % FALLBACK_LOOKS.length]
 }
 
+function cardImageForTrend(trend: TrendData, index: number) {
+  return trend.generatedImageUrl || trend.pexelsImageUrl || fallbackLookImageForTrend(trend, index)
+}
+
 function primaryMarket(trend: TrendData) {
   const market = trend.topMarkets?.[0]
   return market?.code || market?.market || 'GLOBAL'
 }
 
 export default function TrendImageCard({ trend, index, anchorId, onTrendClick }: TrendImageCardProps) {
-  const imageUrl = lookImageForTrend(trend, index)
+  const imageUrl = cardImageForTrend(trend, index)
   const stage = titleCase(trend.velocity.toLowerCase())
 
   return (
