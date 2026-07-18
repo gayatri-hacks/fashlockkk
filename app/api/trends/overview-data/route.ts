@@ -61,6 +61,13 @@ function fallbackOverviewData() {
   return { trendingTrends, cycleTrends }
 }
 
+function cycleVelocityLabel(index: number, total: number): 'RISING' | 'PEAKING' | 'FADING' {
+  const third = Math.max(1, Math.ceil(total / 3))
+  if (index < third) return 'RISING'
+  if (index < third * 2) return 'PEAKING'
+  return 'FADING'
+}
+
 async function attachGeneratedTrendImages<T extends { id: number; keyword?: string; editorialName?: string; oneLiner?: string; howToWear?: string[] }>(trends: T[]) {
   if (!trends.length) return trends
 
@@ -405,10 +412,11 @@ export async function GET() {
 
       // Fetch top 50 IN trends for The Cycle. This is capped and cached for egress control.
       const allTrendsData = await getTopTrendingKeywords('IN', 50)
+      const cycleRankedTrends = [...(allTrendsData || [])].sort((a, b) => b.velocity - a.velocity || b.score - a.score)
 
-      const cycleTrends = (allTrendsData || []).map((trend) => {
+      const cycleTrends = cycleRankedTrends.map((trend, index) => {
       const keyword = trend.keyword
-      const velocity = trendVelocityLabel(trend.score, trend.comparisonScore)
+      const velocity = cycleVelocityLabel(index, cycleRankedTrends.length)
 
       return {
         id: trend.keywordId,
