@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { unstable_cache } from 'next/cache'
 import { getSupabaseClient, logSupabaseFallback, supabaseCache, supabaseCacheTtl } from '@/lib/supabase'
-import { getGeneratedFashionImage } from '@/lib/images/generated-fashion-images'
+import { enqueueTrendImageJob, getGeneratedFashionImage } from '@/lib/images/generated-fashion-images'
 import { syntheticTrendIdForKeyword } from '@/lib/images/build-fashion-image-prompt'
 
 export const dynamic = 'force-dynamic'
@@ -29,6 +29,16 @@ const FALLBACK_PEXELS_QUERIES = (keyword: string) => [
   `${keyword} street style fashion`,
   `${keyword} outfit lookbook`,
 ]
+
+type SearchTrend = {
+  id: number
+  keyword: string
+  editorialName?: string
+  oneLiner?: string
+  howToWear?: string[]
+  conceptImageUrl?: string | null
+  generatedImageUrl?: string | null
+}
 
 function cleanJson(text: string) {
   return text.replace(/```json|```/g, '').trim()
@@ -256,6 +266,64 @@ async function buildGeminiTrend(keyword: string, gemini: any) {
   }
 }
 
+async function attachCardCoverImages<T extends SearchTrend>(trend: T): Promise<T> {
+  const candidateTrendIds = Array.from(
+    new Set([
+      Number.isFinite(trend.id) && trend.id !== 0 ? trend.id : null,
+      trend.keyword ? syntheticTrendIdForKeyword(trend.keyword) : null,
+    ].filter((id): id is number => typeof id === 'number'))
+  )
+
+  let conceptImageUrl: string | null = null
+  let generatedImageUrl: string | null = trend.generatedImageUrl || null
+
+  for (const entityId of candidateTrendIds) {
+    if (!conceptImageUrl) {
+      const conceptImage = await getGeneratedFashionImage({
+        entityType: 'trend',
+        entityId,
+        variant: 'trend_concept',
+      })
+      conceptImageUrl = conceptImage?.image_url || null
+    }
+
+    if (!generatedImageUrl) {
+      const heroImage = await getGeneratedFashionImage({
+        entityType: 'trend',
+        entityId,
+        variant: 'trend_hero',
+      })
+      generatedImageUrl = heroImage?.image_url || null
+    }
+
+    if (conceptImageUrl && generatedImageUrl) break
+  }
+
+  if (!conceptImageUrl && candidateTrendIds[0]) {
+    try {
+      await enqueueTrendImageJob({
+        trend: {
+          id: candidateTrendIds[0],
+          keyword: trend.keyword,
+          editorialName: trend.editorialName || trend.keyword,
+          oneLiner: trend.oneLiner,
+          howToWear: trend.howToWear,
+        },
+        variant: 'trend_concept',
+        priority: 5,
+      })
+    } catch (error) {
+      console.warn('Search trend concept image enqueue skipped:', error instanceof Error ? error.message : error)
+    }
+  }
+
+  return {
+    ...trend,
+    conceptImageUrl,
+    generatedImageUrl,
+  }
+}
+
 async function searchTrend(keyword: string) {
   const prompt = `You are Fashlock's trend intelligence engine.
 The user searched for: ${keyword}
@@ -306,10 +374,15 @@ export async function GET(req: Request) {
   }
 
   try {
-    return NextResponse.json(await cachedSearchTrend(keyword.toLowerCase()))
+    const result = await cachedSearchTrend(keyword.toLowerCase())
+    return NextResponse.json({
+      ...result,
+      trend: result.trend ? await attachCardCoverImages(result.trend) : result.trend,
+    })
   } catch (error) {
     console.error('Trend search route error:', error)
     logSupabaseFallback(error)
-    return NextResponse.json({ source: 'fallback', trend: await buildGeminiTrend(keyword.toLowerCase(), null) })
+    const trend = await buildGeminiTrend(keyword.toLowerCase(), null)
+    return NextResponse.json({ source: 'fallback', trend: await attachCardCoverImages(trend) })
   }
 }

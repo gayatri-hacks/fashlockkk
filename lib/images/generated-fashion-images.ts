@@ -9,6 +9,7 @@ import {
 
 export const DEFAULT_OLLAMA_IMAGE_MODEL = process.env.OLLAMA_IMAGE_MODEL || "x/flux2-klein:4b";
 export const DEFAULT_OLLAMA_IMAGE_SIZE = process.env.OLLAMA_IMAGE_SIZE || "1024x1024";
+export const DEFAULT_OLLAMA_CONCEPT_IMAGE_SIZE = process.env.OLLAMA_CONCEPT_IMAGE_SIZE || "1024x1280";
 
 export type TrendImageSeed = {
   id: number;
@@ -119,7 +120,7 @@ export function buildTrendImageJobPayload({
   outfitOccasion,
   gender,
   model = DEFAULT_OLLAMA_IMAGE_MODEL,
-  imageSize = DEFAULT_OLLAMA_IMAGE_SIZE,
+  imageSize,
 }: {
   trend: TrendImageSeed;
   variant: FashionImageVariant;
@@ -129,6 +130,7 @@ export function buildTrendImageJobPayload({
   model?: string;
   imageSize?: string;
 }) {
+  const resolvedImageSize = imageSize || (variant === "trend_concept" ? DEFAULT_OLLAMA_CONCEPT_IMAGE_SIZE : DEFAULT_OLLAMA_IMAGE_SIZE);
   const prompt = buildFashionImagePrompt({
     entityType: "trend",
     entityId: trend.id,
@@ -141,9 +143,9 @@ export function buildTrendImageJobPayload({
     outfitOccasion,
     gender,
     model,
-    imageSize,
+    imageSize: resolvedImageSize,
   });
-  const promptHash = createFashionPromptHash({ prompt, model, imageSize, variant });
+  const promptHash = createFashionPromptHash({ prompt, model, imageSize: resolvedImageSize, variant });
 
   return {
     entity_type: "trend" as const,
@@ -152,7 +154,7 @@ export function buildTrendImageJobPayload({
     prompt,
     prompt_hash: promptHash,
     model,
-    image_size: imageSize,
+    image_size: resolvedImageSize,
     storage_path: storagePathForFashionImage({ entityId: trend.id, variant, promptHash }),
     metadata: {
       keyword: trend.keyword,
@@ -173,7 +175,7 @@ export async function enqueueTrendImageJob({
   force = false,
   priority = 0,
   model = DEFAULT_OLLAMA_IMAGE_MODEL,
-  imageSize = DEFAULT_OLLAMA_IMAGE_SIZE,
+  imageSize,
 }: {
   trend: TrendImageSeed;
   variant: FashionImageVariant;
@@ -191,6 +193,31 @@ export async function enqueueTrendImageJob({
   const payload = buildTrendImageJobPayload({ trend, variant, outfitFormula, outfitOccasion, gender, model, imageSize });
 
   if (!force) {
+    if (variant === "trend_concept") {
+      const existingConceptImage = await getGeneratedFashionImage({
+        entityType: "trend",
+        entityId: trend.id,
+        variant,
+      });
+      if (existingConceptImage?.image_url) {
+        return { status: "completed" as const, image: existingConceptImage, job: null, payload };
+      }
+
+      const { data: existingConceptJob, error: existingConceptJobError } = await supabase
+        .from("image_generation_jobs")
+        .select("*")
+        .eq("entity_type", "trend")
+        .eq("entity_id", trend.id)
+        .eq("variant", variant)
+        .in("status", ["pending", "processing", "completed"])
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (existingConceptJobError) throw existingConceptJobError;
+      if (existingConceptJob) return { status: "existing_job" as const, image: null, job: existingConceptJob, payload };
+    }
+
     const existingImage = await getGeneratedFashionImage({
       entityType: "trend",
       entityId: trend.id,

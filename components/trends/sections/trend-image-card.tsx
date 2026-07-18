@@ -44,7 +44,7 @@ function fallbackLookImageForTrend(trend: TrendData, index: number) {
 }
 
 function cardImageForTrend(trend: TrendData, index: number) {
-  return trend.generatedImageUrl || trend.pexelsImageUrl || fallbackLookImageForTrend(trend, index)
+  return trend.conceptImageUrl || trend.generatedImageUrl || trend.pexelsImageUrl || fallbackLookImageForTrend(trend, index)
 }
 
 function primaryMarket(trend: TrendData) {
@@ -82,13 +82,13 @@ export default function TrendImageCard({ trend, index, anchorId, onTrendClick }:
     >
       <img
         src={imageUrl}
-        alt={`${trend.editorialName} outfit`}
+        alt={`${trend.editorialName} trend concept`}
         loading="lazy"
         style={{
           display: 'block',
           height: '100%',
           objectFit: 'cover',
-          objectPosition: 'center center',
+          objectPosition: 'center top',
           width: '100%',
         }}
       />

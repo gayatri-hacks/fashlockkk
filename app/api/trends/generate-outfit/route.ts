@@ -44,7 +44,7 @@ function variantForRequest({
   assetContext: string;
   gender: Gender;
 }) {
-  if (assetContext === "trend-card") return "trend_hero" as const;
+  if (assetContext === "trend-card") return "trend_concept" as const;
   return gender === "men" ? ("trend_men" as const) : ("trend_women" as const);
 }
 
@@ -82,6 +82,8 @@ export async function POST(req: Request) {
             : "her";
     const trendId = Number(body.trendId || body.entityId || body.id || 0);
     const variant = variantForRequest({ assetContext, gender });
+    const lookupVariants =
+      assetContext === "trend-card" ? (["trend_concept", "trend_hero"] as const) : ([variant] as const);
     const outfitFormula = formula || buildTrendCardOutfitFormula(trendKeyword || outfitTitle, audience);
 
     const candidateTrendIds = Array.from(
@@ -111,21 +113,23 @@ export async function POST(req: Request) {
             })
           : null;
 
-      const generatedImage = await getGeneratedFashionImage({
-        entityType: "trend",
-        entityId: candidateTrendId,
-        variant,
-        promptHash: exactPayload?.prompt_hash,
-      });
+      for (const lookupVariant of lookupVariants) {
+        const generatedImage = await getGeneratedFashionImage({
+          entityType: "trend",
+          entityId: candidateTrendId,
+          variant: lookupVariant,
+          promptHash: lookupVariant === variant ? exactPayload?.prompt_hash : null,
+        });
 
-      if (generatedImage?.image_url) {
-        return NextResponse.json({
-          imageUrl: generatedImage.image_url,
-          imageSource: "ollama",
-          assetId: null,
-          cached: true,
-          status: "cached",
-        } satisfies OutfitResponse);
+        if (generatedImage?.image_url) {
+          return NextResponse.json({
+            imageUrl: generatedImage.image_url,
+            imageSource: "ollama",
+            assetId: null,
+            cached: true,
+            status: "cached",
+          } satisfies OutfitResponse);
+        }
       }
     }
 
@@ -159,6 +163,27 @@ export async function POST(req: Request) {
         cached: false,
         status: "pending",
       } satisfies OutfitResponse);
+    }
+
+    if (assetContext === "trend-card") {
+      const enqueueTrendId =
+        candidateTrendIds.find((candidateTrendId) => candidateTrendId > 0) || candidateTrendIds[0];
+
+      if (enqueueTrendId) {
+        try {
+          await enqueueTrendImageJob({
+            trend: {
+              id: enqueueTrendId,
+              keyword: trendKeyword || outfitTitle,
+              editorialName: trendKeyword || outfitTitle,
+            },
+            variant: "trend_concept",
+            priority: 5,
+          });
+        } catch (error) {
+          console.warn("Trend card concept image enqueue skipped:", error instanceof Error ? error.message : error);
+        }
+      }
     }
 
     const fallback = await resolveTrendOutfitFallback({

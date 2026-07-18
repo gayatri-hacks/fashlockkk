@@ -84,37 +84,42 @@ async function attachGeneratedTrendImages<T extends { id: number; keyword?: stri
 
   const generatedImages = await getGeneratedFashionImagesForTrends(
     ids,
-    ['trend_hero']
+    ['trend_concept', 'trend_hero']
   )
 
   return Promise.all(
     trends.map(async (trend) => {
       const syntheticId = syntheticIdsByTrendId.get(trend.id)
+      const conceptImageUrl =
+        generatedImages.get(`${trend.id}:trend_concept`)?.image_url ||
+        generatedImages.get(`${syntheticId}:trend_concept`)?.image_url ||
+        null
       const generatedImageUrl =
         generatedImages.get(`${trend.id}:trend_hero`)?.image_url ||
         generatedImages.get(`${syntheticId}:trend_hero`)?.image_url ||
         null
 
-      if (!generatedImageUrl && trend.keyword && syntheticId) {
+      if (!conceptImageUrl && trend.keyword) {
         try {
           await enqueueTrendImageJob({
             trend: {
-              id: syntheticId,
+              id: trend.id,
               keyword: trend.keyword,
               editorialName: trend.editorialName || trend.keyword,
               oneLiner: trend.oneLiner,
               howToWear: trend.howToWear,
             },
-            variant: 'trend_hero',
+            variant: 'trend_concept',
             priority: 1,
           })
         } catch (error) {
-          console.warn('Trend hero image enqueue skipped:', error instanceof Error ? error.message : error)
+          console.warn('Trend concept image enqueue skipped:', error instanceof Error ? error.message : error)
         }
       }
 
       return {
         ...trend,
+        conceptImageUrl,
         generatedImageUrl,
       }
     })

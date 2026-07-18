@@ -20,8 +20,13 @@ type Options = {
   topOnly: boolean;
 };
 
+type HistoricalTrendRow = {
+  keyword_id: number | string | null;
+  month?: string | null;
+};
+
 function parseArgs(argv: string[]): Options {
-  const options: Options = { limit: 5, variant: "trend_hero", force: false, topOnly: false };
+  const options: Options = { limit: 5, variant: "trend_concept", force: false, topOnly: false };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -74,15 +79,31 @@ async function loadTrendIds(options: Options) {
   if (!supabase) throw new Error("Supabase service credentials are required");
 
   if (options.topOnly) {
+    const { data: latestRows, error: latestError } = await supabase
+      .from("historical_trend_data")
+      .select("month")
+      .eq("market", "IN")
+      .order("month", { ascending: false })
+      .limit(1);
+
+    if (latestError) throw latestError;
+
+    const latestMonth = ((latestRows || []) as HistoricalTrendRow[])[0]?.month;
+    if (!latestMonth) return [];
+
     const { data, error } = await supabase
       .from("historical_trend_data")
       .select("keyword_id, google_score")
       .eq("market", "IN")
+      .eq("month", latestMonth)
       .order("google_score", { ascending: false })
       .limit(options.limit);
 
     if (error) throw error;
-    return Array.from(new Set((data || []).map((row: any) => Number(row.keyword_id)).filter(Boolean))).slice(0, options.limit);
+    return Array.from(new Set(((data || []) as HistoricalTrendRow[]).map((row) => Number(row.keyword_id)).filter(Boolean))).slice(
+      0,
+      options.limit,
+    );
   }
 
   const { data, error } = await supabase
@@ -97,7 +118,8 @@ async function loadTrendIds(options: Options) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const variants = options.variant === "all" ? ["trend_hero", "trend_women", "trend_men"] : [options.variant];
+  const variants: FashionImageVariant[] =
+    options.variant === "all" ? ["trend_concept", "trend_women", "trend_men"] : [options.variant];
   const trendIds = await loadTrendIds(options);
 
   let queued = 0;

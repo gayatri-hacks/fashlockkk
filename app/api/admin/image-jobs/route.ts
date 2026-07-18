@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 const postSchema = z.object({
   entityType: z.literal("trend"),
   entityId: z.coerce.number().int().positive(),
-  variant: z.enum(FASHION_IMAGE_VARIANTS),
+  variant: z.enum(FASHION_IMAGE_VARIANTS).optional().default("trend_concept"),
   formula: z.string().trim().optional(),
   occasion: z.string().trim().optional(),
   gender: z.enum(["women", "men"]).optional(),
