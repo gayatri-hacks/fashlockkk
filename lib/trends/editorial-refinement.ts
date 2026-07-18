@@ -60,26 +60,106 @@ export function evidenceHash(bundle: TrendEvidenceBundle) {
     .digest("hex");
 }
 
+export const EDITORIAL_NAME_ONTOLOGY: Record<string, {
+  anchors: string[];
+  aliases: string[];
+  verifiedSubtypes: string[];
+  safeFallback: string;
+}> = {
+  baggy: {
+    anchors: ["baggy"],
+    aliases: ["oversized", "slouchy", "relaxed"],
+    verifiedSubtypes: ["baggy jeans", "baggy trousers", "baggy pants"],
+    safeFallback: "Baggy Silhouettes",
+  },
+  blazer: {
+    anchors: ["blazer"],
+    aliases: ["blazers"],
+    verifiedSubtypes: ["oversized blazer", "tailored blazer", "boxy blazer"],
+    safeFallback: "Blazers",
+  },
+  flared: {
+    anchors: ["flared", "flare"],
+    aliases: ["bootcut"],
+    verifiedSubtypes: ["flared jeans", "flared trousers", "flared pants"],
+    safeFallback: "Flared Silhouettes",
+  },
+  leather: {
+    anchors: ["leather", "suede"],
+    aliases: ["leathers"],
+    verifiedSubtypes: ["leather jacket", "leather skirt", "leather trousers", "leather pants"],
+    safeFallback: "Leather",
+  },
+  loose: {
+    anchors: ["loose"],
+    aliases: ["relaxed", "unstructured", "flowing"],
+    verifiedSubtypes: ["loose shirt", "loose trousers", "loose pants", "loose tunic"],
+    safeFallback: "Loose Silhouettes",
+  },
+  minimal: {
+    anchors: ["minimal", "minimalist"],
+    aliases: ["quiet", "reduced"],
+    verifiedSubtypes: ["minimal shirt", "minimal dress", "minimal tailoring"],
+    safeFallback: "Minimal Dressing",
+  },
+  tailored: {
+    anchors: ["tailored", "tailoring"],
+    aliases: ["sharp tailoring"],
+    verifiedSubtypes: ["tailored blazer", "tailored trousers", "tailored shirt"],
+    safeFallback: "Tailoring",
+  },
+  graphic: {
+    anchors: ["graphic"],
+    aliases: ["screen print", "printed graphic"],
+    verifiedSubtypes: ["graphic tee", "graphic shirt", "graphic print"],
+    safeFallback: "Graphic Prints",
+  },
+  floral: {
+    anchors: ["floral"],
+    aliases: ["flower print", "botanical print"],
+    verifiedSubtypes: ["floral dress", "floral shirt", "floral print"],
+    safeFallback: "Floral Prints",
+  },
+  washed: {
+    anchors: ["washed", "faded"],
+    aliases: ["washed denim", "faded denim"],
+    verifiedSubtypes: ["washed jeans", "washed shirt", "washed jacket"],
+    safeFallback: "Washed Denim",
+  },
+  oversized: {
+    anchors: ["oversized", "oversize"],
+    aliases: ["dropped shoulder", "extra large"],
+    verifiedSubtypes: ["oversized shirt", "oversized blazer", "oversized jacket"],
+    safeFallback: "Oversized Silhouettes",
+  },
+  "oversized blazer": {
+    anchors: ["oversized blazer", "blazer"],
+    aliases: ["boxy blazer", "relaxed blazer"],
+    verifiedSubtypes: ["oversized blazer", "boxy blazer", "relaxed blazer"],
+    safeFallback: "Oversized Blazers",
+  },
+};
+
 export function deterministicEditorialFallback(bundle: Pick<TrendEvidenceBundle, "canonicalKeyword" | "garmentCategories" | "materials" | "patternsCraftTerms">) {
   const keyword = bundle.canonicalKeyword;
-  const garment = bundle.garmentCategories[0];
-  const material = bundle.materials[0];
-  const craft = bundle.patternsCraftTerms[0];
   const conservativeNames: Record<string, string> = {
     cargo: "Cargo",
-    baggy: "Baggy",
-    blazer: "Blazer",
+    baggy: "Baggy Silhouettes",
+    blazer: "Blazers",
     chinos: "Chinos",
+    "co-ord": "Co-Ord Sets",
+    "co-ord set": "Co-Ord Sets",
     denim: "Denim",
-    flared: "Flared",
+    flared: "Flared Silhouettes",
     floral: "Floral Prints",
     graphic: "Graphic Prints",
     kurta: "Kurta",
     leather: "Leather",
     linen: "Linen",
-    maxi: "Maxi Dresses",
+    jumpsuit: "Jumpsuits",
+    maxi: "Maxi Lengths",
     mesh: "Mesh",
-    minimal: "Minimal",
+    minimal: "Minimal Dressing",
     mini: "Mini",
     pleated: "Pleated",
     printed: "Printed",
@@ -89,11 +169,16 @@ export function deterministicEditorialFallback(bundle: Pick<TrendEvidenceBundle,
     washed: "Washed Denim",
     "wide leg trousers": "Wide-Leg Trousers",
     y2k: "Y2K",
+    loose: "Loose Silhouettes",
+    "oversized blazer": "Oversized Blazers",
   };
 
   if (conservativeNames[keyword]) return conservativeNames[keyword];
+  const garment = bundle.garmentCategories[0];
+  const material = bundle.materials[0];
+  const craft = bundle.patternsCraftTerms[0];
   if (garment && (keyword.includes(garment) || garment.includes(keyword))) return titleCaseTrend(garment);
-  if (garment && ["loose", "oversized", "relaxed fit", "cropped", "wide leg"].includes(keyword)) {
+  if (garment && ["relaxed fit", "cropped", "wide leg"].includes(keyword)) {
     return titleCaseTrend(`${keyword} ${garment}${garment.endsWith("s") ? "" : "s"}`);
   }
   if (material && garment) return titleCaseTrend(`${material} ${garment}`);
@@ -103,23 +188,10 @@ export function deterministicEditorialFallback(bundle: Pick<TrendEvidenceBundle,
   return titleCaseTrend(keyword);
 }
 
-const CANONICAL_NAME_ANCHORS: Record<string, string[]> = {
-  baggy: ["baggy"],
-  blazer: ["blazer"],
-  flared: ["flared", "flare", "bootcut"],
-  leather: ["leather", "suede"],
-  minimal: ["minimal", "minimalist"],
-  tailored: ["tailored", "tailoring"],
-  graphic: ["graphic", "screen print", "printed"],
-  floral: ["floral", "flower print"],
-  washed: ["washed", "faded"],
-  oversized: ["oversized", "oversize"],
-  loose: ["loose", "relaxed", "unstructured"],
-};
-
 const UNRELATED_CONCEPT_TERMS = [
   "denim",
   "shirt",
+  "shirts",
   "pant",
   "pants",
   "trouser",
@@ -136,7 +208,59 @@ const UNRELATED_CONCEPT_TERMS = [
   "minimal",
   "baggy",
   "flared",
+  "loose",
+  "oversized",
+  "vintage",
+  "maxi",
+  "mini",
+  "cargo",
+  "utility",
+  "trench",
+  "chinos",
 ];
+
+const GARMENT_TERMS = [
+  "shirt",
+  "shirts",
+  "t-shirt",
+  "tee",
+  "jeans",
+  "denim",
+  "trouser",
+  "trousers",
+  "pant",
+  "pants",
+  "kurta",
+  "dress",
+  "dresses",
+  "skirt",
+  "skirts",
+  "blazer",
+  "blazers",
+  "jacket",
+  "jackets",
+  "trench",
+  "coat",
+  "coats",
+  "top",
+  "tops",
+  "saree",
+  "shoe",
+  "shoes",
+  "sneaker",
+  "sneakers",
+  "boot",
+  "boots",
+  "bag",
+  "bags",
+];
+
+function singularish(value: string) {
+  const normalized = normaliseNameText(value);
+  if (normalized.endsWith("ies")) return `${normalized.slice(0, -3)}y`;
+  if (normalized.endsWith("s") && normalized.length > 3) return normalized.slice(0, -1);
+  return normalized;
+}
 
 function normaliseNameText(value: string) {
   return value.toLowerCase().replace(/[-_/]+/g, " ").replace(/\s+/g, " ").trim();
@@ -145,7 +269,16 @@ function normaliseNameText(value: string) {
 function containsTerm(text: string, term: string) {
   const normalized = normaliseNameText(text);
   const normalizedTerm = normaliseNameText(term);
-  return normalized === normalizedTerm || normalized.includes(` ${normalizedTerm} `) || normalized.startsWith(`${normalizedTerm} `) || normalized.endsWith(` ${normalizedTerm}`);
+  const normalizedSingular = singularish(normalized);
+  const termSingular = singularish(normalizedTerm);
+  return normalized === normalizedTerm ||
+    normalizedSingular === termSingular ||
+    normalized.includes(` ${normalizedTerm} `) ||
+    normalized.startsWith(`${normalizedTerm} `) ||
+    normalized.endsWith(` ${normalizedTerm}`) ||
+    normalized.includes(` ${termSingular} `) ||
+    normalized.startsWith(`${termSingular} `) ||
+    normalized.endsWith(` ${termSingular}`);
 }
 
 export function validateEditorialNameSafety(displayName: string, bundle: Pick<TrendEvidenceBundle, "canonicalKeyword" | "rawKeywords" | "garmentCategories" | "materials" | "patternsCraftTerms" | "colors">) {
@@ -153,30 +286,67 @@ export function validateEditorialNameSafety(displayName: string, bundle: Pick<Tr
   const display = normaliseNameText(displayName);
   if (!display) return { ok: false as const, reason: "Display name is empty" };
 
-  const anchors = CANONICAL_NAME_ANCHORS[canonicalKeyword] || [canonicalKeyword, ...bundle.rawKeywords.map(normaliseNameText)];
-  const hasAnchor = anchors.some((anchor) => containsTerm(display, anchor));
-  if (!hasAnchor) {
-    return {
-      ok: false as const,
-      reason: `Display name "${displayName}" does not preserve canonical keyword "${bundle.canonicalKeyword}"`,
-    };
-  }
-
-  const trustedTerms = new Set([
+  const ontology = EDITORIAL_NAME_ONTOLOGY[canonicalKeyword];
+  const anchors = ontology?.anchors || [canonicalKeyword];
+  const aliases = ontology?.aliases || [];
+  const verifiedSubtypes = ontology?.verifiedSubtypes || [];
+  const evidenceTerms = new Set([
     canonicalKeyword,
-    ...anchors,
     ...bundle.rawKeywords,
     ...bundle.garmentCategories,
     ...bundle.materials,
     ...bundle.patternsCraftTerms,
     ...bundle.colors,
   ].map(normaliseNameText));
+  const hasCanonicalConcept = [...anchors, ...aliases].some((anchor) => containsTerm(display, anchor));
+  const matchingSubtype = verifiedSubtypes.find((subtype) => containsTerm(display, subtype));
+  const subtypeIsVerified = matchingSubtype
+    ? normaliseNameText(matchingSubtype)
+        .split(" ")
+        .every((part) => [...evidenceTerms].some((evidenceTerm) => evidenceTerm === part || containsTerm(evidenceTerm, part) || containsTerm(part, evidenceTerm)))
+    : false;
 
-  const unrelated = UNRELATED_CONCEPT_TERMS.filter((term) => containsTerm(display, term) && !trustedTerms.has(normaliseNameText(term)));
+  if (!hasCanonicalConcept && !subtypeIsVerified) {
+    return {
+      ok: false as const,
+      reason: `Display name "${displayName}" does not preserve canonical concept "${bundle.canonicalKeyword}" or a verified alias/subtype`,
+    };
+  }
+
+  const trustedTerms = new Set([
+    canonicalKeyword,
+    ...anchors,
+    ...aliases,
+    ...(subtypeIsVerified && matchingSubtype ? normaliseNameText(matchingSubtype).split(" ") : []),
+    ...bundle.rawKeywords,
+    ...bundle.garmentCategories,
+    ...bundle.materials,
+    ...bundle.patternsCraftTerms,
+    ...bundle.colors,
+  ].map(normaliseNameText));
+  const isTrustedTerm = (term: string) => {
+    const normalizedTerm = normaliseNameText(term);
+    return [...trustedTerms].some((trustedTerm) =>
+      trustedTerm === normalizedTerm ||
+      singularish(trustedTerm) === singularish(normalizedTerm) ||
+      containsTerm(trustedTerm, normalizedTerm) ||
+      containsTerm(normalizedTerm, trustedTerm),
+    );
+  };
+
+  const unrelated = UNRELATED_CONCEPT_TERMS.filter((term) => containsTerm(display, term) && !isTrustedTerm(term));
   if (unrelated.length) {
     return {
       ok: false as const,
       reason: `Display name contains unrelated concept terms: ${unrelated.join(", ")}`,
+    };
+  }
+
+  const unverifiedGarments = GARMENT_TERMS.filter((term) => containsTerm(display, term) && !isTrustedTerm(term));
+  if (unverifiedGarments.length) {
+    return {
+      ok: false as const,
+      reason: `Display name introduces garment-specific term without evidence: ${unverifiedGarments.join(", ")}`,
     };
   }
 
@@ -194,9 +364,14 @@ Rules:
 - Return strict JSON only.
 - Do not decide scores, lifecycle or market classification.
 - Do not invent a garment, color, fabric, region, season, brand or cultural claim.
+- Treat canonicalKeyword as the source of truth.
+- The display name must preserve the canonical concept or a verified alias/subtype present in evidence.
+- Do not introduce a garment, material, pattern or trend that is absent from evidence.
+- Do not use garment-specific names unless that garment appears in garmentCategories, rawKeywords or product evidence.
+- If evidence is thin or ambiguous, use a conservative canonical name.
 - Normally use 2-6 words.
 - Prefer clear fashion language over hype.
-- Use canonical_keyword when evidence is too thin.
+- Never reuse a name from a different keyword.
 
 Schema:
 {

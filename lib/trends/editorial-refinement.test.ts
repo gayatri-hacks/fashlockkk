@@ -30,7 +30,7 @@ test("evidence hash is stable for unchanged evidence", () => {
 });
 
 test("fallback uses supported evidence without inventing detail", () => {
-  assert.equal(deterministicEditorialFallback(bundle), "Loose Shirts");
+  assert.equal(deterministicEditorialFallback(bundle), "Loose Silhouettes");
 });
 
 test("AI validation accepts supported facets", () => {
@@ -81,20 +81,55 @@ test("editorial-name safety prevents leather becoming Denim Shirt", () => {
 
 test("editorial-name safety prevents blazer becoming Denim Denim", () => {
   assert.equal(validateEditorialNameSafety("Denim Denim", contaminationBundle("blazer")).ok, false);
-  assert.equal(deterministicEditorialFallback(contaminationBundle("blazer")), "Blazer");
+  assert.equal(deterministicEditorialFallback(contaminationBundle("blazer")), "Blazers");
 });
 
 test("editorial-name safety prevents flared becoming Embroidered Pant", () => {
   assert.equal(validateEditorialNameSafety("Embroidered Pant", contaminationBundle("flared")).ok, false);
-  assert.equal(deterministicEditorialFallback(contaminationBundle("flared")), "Flared");
+  assert.equal(deterministicEditorialFallback(contaminationBundle("flared")), "Flared Silhouettes");
 });
 
 test("editorial-name safety prevents baggy becoming Cotton Pant", () => {
   assert.equal(validateEditorialNameSafety("Cotton Pant", contaminationBundle("baggy")).ok, false);
-  assert.equal(deterministicEditorialFallback(contaminationBundle("baggy")), "Baggy");
+  assert.equal(deterministicEditorialFallback(contaminationBundle("baggy")), "Baggy Silhouettes");
 });
 
 test("editorial-name safety prevents minimal becoming Cotton Shirt", () => {
   assert.equal(validateEditorialNameSafety("Cotton Shirt", contaminationBundle("minimal")).ok, false);
-  assert.equal(deterministicEditorialFallback(contaminationBundle("minimal")), "Minimal");
+  assert.equal(deterministicEditorialFallback(contaminationBundle("minimal")), "Minimal Dressing");
+});
+
+test("editorial-name safety prevents loose becoming Loose Trousers when trouser evidence is absent", () => {
+  const result = validateEditorialNameSafety("Loose Trousers", {
+    ...contaminationBundle("loose"),
+    garmentCategories: ["shirt"],
+    rawKeywords: ["loose", "loose shirt"],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(deterministicEditorialFallback(contaminationBundle("loose")), "Loose Silhouettes");
+});
+
+test("editorial-name safety accepts garment names only when that garment is evidenced", () => {
+  const result = validateEditorialNameSafety("Loose Shirts", {
+    ...contaminationBundle("loose"),
+    garmentCategories: ["shirt"],
+    rawKeywords: ["loose", "loose shirt"],
+  });
+
+  assert.equal(result.ok, true);
+});
+
+test("editorial-name safety rejects stale names reused for another keyword", () => {
+  const result = validateEditorialNameResult({
+    display_name: "Graphic Prints",
+    confidence: 0.9,
+    used_facets: ["leather"],
+    reason: "This stale result came from a different keyword.",
+  }, {
+    ...contaminationBundle("leather"),
+    materials: ["leather"],
+  });
+
+  assert.equal(result.ok, false);
 });

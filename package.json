@@ -12,6 +12,8 @@
     "trends:recompute": "tsx scripts/recompute-multi-region-trends.ts",
     "trends:rollover": "python3 scraper/fetch_global_trends.py --rollover",
     "trends:verify-period-finalization": "tsx scripts/verify-trend-period-finalization.ts",
+    "trends:cleanup-editorial-names": "tsx scripts/cleanup-editorial-names.ts",
+    "trends:plan-concept-regeneration": "tsx scripts/plan-trend-concept-regeneration.ts",
     "images:enqueue": "tsx scripts/enqueue-trend-images.ts",
     "images:worker": "tsx scripts/ollama-image-worker.ts"
   },
