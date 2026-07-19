@@ -40,6 +40,7 @@ jobs:
       GEMINI_VISION_MODEL: ${{ vars.GEMINI_VISION_MODEL || 'gemini-2.5-flash' }}
       IMAGE_OCR_PROVIDER: ${{ vars.IMAGE_OCR_PROVIDER || 'local_tesseract' }}
       AUTO_ENQUEUE_TREND_IMAGES_ENABLED: "false"
+      IMAGE_WORKER_VARIANT: trend_concept
       IMAGE_WORKER_MAX_JOBS: ${{ github.event_name == 'workflow_dispatch' && inputs.max_jobs || vars.CLOUD_IMAGE_JOBS_PER_RUN || '2' }}
 
     steps:

@@ -5,6 +5,7 @@ import { storagePathForFashionImage, type FashionImageVariant } from "../lib/ima
 import { createImageGenerator, RetryableImageGenerationError } from "../lib/images/image-generator";
 import { analyzeImagePixels, createOcrProvider } from "../lib/images/image-pixel-analysis";
 import { createImageSemanticValidator } from "../lib/images/image-semantic-validator";
+import { buildImageWorkerClaimRpc, parseImageWorkerVariant } from "../lib/images/image-worker-claim";
 import { buildTrendImageBrief } from "../lib/images/trend-image-brief";
 import {
   candidateFactsFromAnalysis,
@@ -33,6 +34,7 @@ type ImageGenerationJob = {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const workerId = process.env.IMAGE_WORKER_ID || `image-worker-${process.pid}`;
 const pollMs = Number(process.env.IMAGE_WORKER_POLL_MS || 5000);
+const lockTimeoutMinutes = Number(process.env.IMAGE_WORKER_LOCK_TIMEOUT_MINUTES || 30);
 const bucketName = "generated-fashion-images";
 const webpQuality = Number(process.env.IMAGE_WORKER_WEBP_QUALITY || 92);
 const trendConceptCandidateCount = Number(process.env.TREND_CONCEPT_CANDIDATE_COUNT || 3);
@@ -43,6 +45,7 @@ const maxJobs = Number(
 const imageGenerator = createImageGenerator();
 const semanticValidator = createImageSemanticValidator();
 const ocrProvider = createOcrProvider();
+const workerVariant = parseImageWorkerVariant(process.env.IMAGE_WORKER_VARIANT);
 
 let stopping = false;
 
@@ -71,10 +74,12 @@ const supabase = createClient(
 );
 
 async function claimJob() {
-  const { data, error } = await supabase.rpc("claim_next_image_generation_job", {
-    worker_id: workerId,
-    lock_timeout_minutes: 30,
+  const claimRpc = buildImageWorkerClaimRpc({
+    workerId,
+    lockTimeoutMinutes,
+    desiredVariant: workerVariant,
   });
+  const { data, error } = await supabase.rpc(claimRpc.name, claimRpc.args);
 
   if (error) throw error;
   return ((Array.isArray(data) ? data[0] : data) || null) as ImageGenerationJob | null;
@@ -540,7 +545,7 @@ async function processTrendConceptJob(job: ImageGenerationJob) {
 
 async function main() {
   await ensureBucket();
-  console.log(`Image worker ${workerId} using ${imageGenerator.describe()}`);
+  console.log(`Image worker ${workerId} using ${imageGenerator.describe()}${workerVariant ? ` variant=${workerVariant}` : ""}`);
   let processedJobs = 0;
 
   while (!stopping) {

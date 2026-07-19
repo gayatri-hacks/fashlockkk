@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { createImageGenerator, RetryableImageGenerationError } from "@/lib/images/image-generator";
 import { analyzeImagePixels, classifyOcrWords, createOcrProvider, type OcrProvider } from "@/lib/images/image-pixel-analysis";
 import { createImageSemanticValidator, unavailableSemanticValidation } from "@/lib/images/image-semantic-validator";
+import { buildImageWorkerClaimRpc, parseImageWorkerVariant } from "@/lib/images/image-worker-claim";
 import { buildTrendImageBrief } from "@/lib/images/trend-image-brief";
 import {
   candidateFactsFromAnalysis,
@@ -352,6 +353,63 @@ test("migration 025 remains additive and avoids destructive replacement", () => 
   assert.equal(/create\s+or\s+replace\s+function/.test(sql), false);
   assert.ok(sql.includes("add column if not exists"));
   assert.ok(sql.includes("create index if not exists"));
+});
+
+test("migration 026 makes internal review data private and service-role scoped", () => {
+  const sql = readFileSync("database/026_trend_concept_validation_security.sql", "utf8").toLowerCase();
+
+  assert.ok(sql.includes('drop policy if exists "trend concept image reviews are readable"'));
+  assert.ok(sql.includes('drop policy if exists "trend concept image candidates are readable"'));
+  assert.ok(sql.includes("revoke all on table trend_concept_image_reviews from public, anon, authenticated"));
+  assert.ok(sql.includes("revoke all on table trend_concept_image_candidates from public, anon, authenticated"));
+  assert.ok(sql.includes("to service_role"));
+  assert.ok(sql.includes("claim_next_image_generation_job_for_variant"));
+});
+
+test("variant-scoped concept worker never requests trend_women, trend_men or trend_hero", () => {
+  const desiredVariant = parseImageWorkerVariant("trend_concept");
+  const claim = buildImageWorkerClaimRpc({
+    workerId: "cloud-worker-test",
+    lockTimeoutMinutes: 30,
+    desiredVariant,
+  });
+
+  assert.equal(claim.name, "claim_next_image_generation_job_for_variant");
+  assert.equal(claim.args.desired_variant, "trend_concept");
+  assert.notEqual(claim.args.desired_variant, "trend_women");
+  assert.notEqual(claim.args.desired_variant, "trend_men");
+  assert.notEqual(claim.args.desired_variant, "trend_hero");
+});
+
+test("unscoped local worker still uses the existing general claim function", () => {
+  const claim = buildImageWorkerClaimRpc({
+    workerId: "local-worker-test",
+    lockTimeoutMinutes: 30,
+    desiredVariant: null,
+  });
+
+  assert.equal(claim.name, "claim_next_image_generation_job");
+  assert.equal("desired_variant" in claim.args, false);
+});
+
+test("variant-scoped SQL claims only the exact desired variant", () => {
+  const sql = readFileSync("database/026_trend_concept_validation_security.sql", "utf8").toLowerCase();
+
+  assert.ok(sql.includes("variant = desired_variant"));
+  assert.ok(sql.includes("for update skip locked"));
+  assert.ok(sql.includes("desired_variant not in"));
+  assert.ok(sql.includes("grant execute on function claim_next_image_generation_job_for_variant"));
+});
+
+test("quota retry metadata path does not target unrelated variants", () => {
+  const claim = buildImageWorkerClaimRpc({
+    workerId: "cloud-worker-test",
+    lockTimeoutMinutes: 30,
+    desiredVariant: "trend_concept",
+  });
+
+  assert.equal(claim.args.desired_variant, "trend_concept");
+  assert.equal(["trend_women", "trend_men", "trend_hero"].includes(claim.args.desired_variant), false);
 });
 
 test("all failed candidates select no image, preserving the current production image", () => {

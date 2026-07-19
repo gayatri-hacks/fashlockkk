@@ -83,4 +83,4 @@ Cloud generation is disabled by default. To enable the optional GitHub Actions w
 - Keep `IMAGE_OCR_PROVIDER=local_tesseract` unless deliberately using the optional HTTP OCR provider.
 - Optionally set `IMAGE_SEMANTIC_VALIDATOR_FALLBACK_PROVIDER=gemini` and secret `GEMINI_API_KEY`.
 
-Do not enable the cloud workflow until the queue is intentionally prepared; it never enqueues new image jobs by itself.
+The daily cloud workflow sets `IMAGE_WORKER_VARIANT=trend_concept`, so it uses the service-role-only variant-scoped queue RPC and cannot claim `trend_women`, `trend_men` or `trend_hero` jobs. Do not enable the cloud workflow until the queue is intentionally prepared; it never enqueues new image jobs by itself.
