@@ -1,10 +1,26 @@
 import { createHash } from "crypto";
+import { createRequire } from "module";
+import { dirname, join, sep } from "path";
+
+const require = createRequire(import.meta.url);
+
+export type OcrBox = {
+  text: string;
+  confidence: number;
+  bbox?: {
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+  };
+};
 
 export type OcrResult = {
   available: boolean;
   textDetected: boolean;
   text: string;
   confidence: number;
+  boxes: OcrBox[];
   provider: string;
   error?: string;
 };
@@ -47,9 +63,150 @@ class UnavailableOcrProvider implements OcrProvider {
       textDetected: false,
       text: "",
       confidence: 0,
+      boxes: [],
       provider: this.provider,
-      error: "IMAGE_OCR_PROVIDER is not configured. Configure tesseract.js or a maintained OCR service before approving new concept images.",
+      error: "IMAGE_OCR_PROVIDER is disabled. Configure IMAGE_OCR_PROVIDER=local_tesseract or http before approving new concept images.",
     };
+  }
+}
+
+function ocrThreshold(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return parsed > 1 ? parsed / 100 : parsed;
+}
+
+function normalizeConfidence(value: unknown) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(1, parsed > 1 ? parsed / 100 : parsed));
+}
+
+function compactOcrText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function isTextLikeToken(value: string, minWordLength: number) {
+  const normalized = value.replace(/[^A-Za-z0-9]/g, "");
+  if (normalized.length < minWordLength) return false;
+  return /[A-Za-z]/.test(normalized) || /\d{3,}/.test(normalized);
+}
+
+export function classifyOcrWords(
+  words: OcrBox[],
+  options: {
+    provider: string;
+    confidenceThreshold?: number;
+    minWordLength?: number;
+    minTextFragments?: number;
+    rawText?: string;
+  },
+): OcrResult {
+  const confidenceThreshold = options.confidenceThreshold ?? 0.72;
+  const minWordLength = options.minWordLength ?? 3;
+  const minTextFragments = options.minTextFragments ?? 2;
+  const confidentWords = words
+    .map((word) => ({
+      ...word,
+      text: compactOcrText(word.text),
+      confidence: normalizeConfidence(word.confidence),
+    }))
+    .filter((word) => word.text && word.confidence >= confidenceThreshold);
+
+  const textLikeWords = confidentWords.filter((word) => isTextLikeToken(word.text, minWordLength));
+  const averageConfidence = confidentWords.length
+    ? confidentWords.reduce((sum, word) => sum + word.confidence, 0) / confidentWords.length
+    : 0;
+  const rawText = compactOcrText(options.rawText || words.map((word) => word.text).join(" "));
+
+  return {
+    available: true,
+    textDetected: textLikeWords.length >= 1 || confidentWords.length >= minTextFragments,
+    text: rawText,
+    confidence: averageConfidence,
+    boxes: confidentWords,
+    provider: options.provider,
+  };
+}
+
+function bundledTesseractLangPath() {
+  try {
+    return `${join(dirname(require.resolve("@tesseract.js-data/eng/package.json")), "4.0.0")}${sep}`;
+  } catch {
+    return "";
+  }
+}
+
+class LocalTesseractOcrProvider implements OcrProvider {
+  readonly provider = "local_tesseract";
+  private workerPromise: Promise<any> | null = null;
+  private readonly confidenceThreshold: number;
+  private readonly minWordLength: number;
+  private readonly minTextFragments: number;
+  private readonly langPath: string;
+  private readonly cachePath: string | undefined;
+
+  constructor(env: NodeJS.ProcessEnv) {
+    this.confidenceThreshold = ocrThreshold(env.IMAGE_OCR_MIN_CONFIDENCE, 0.72);
+    this.minWordLength = Math.max(1, Number(env.IMAGE_OCR_MIN_WORD_LENGTH || 3));
+    this.minTextFragments = Math.max(1, Number(env.IMAGE_OCR_MIN_FRAGMENTS || 2));
+    this.langPath = env.TESSERACT_LANG_PATH || bundledTesseractLangPath();
+    this.cachePath = env.TESSERACT_CACHE_PATH;
+  }
+
+  private async worker() {
+    if (!this.workerPromise) {
+      this.workerPromise = (async () => {
+        if (!this.langPath) {
+          throw new ImagePixelAnalysisError("@tesseract.js-data/eng is required for IMAGE_OCR_PROVIDER=local_tesseract");
+        }
+
+        const tesseract: any = await import("tesseract.js");
+        const worker = await tesseract.createWorker("eng", 1, {
+          langPath: this.langPath,
+          ...(this.cachePath ? { cachePath: this.cachePath } : {}),
+          gzip: true,
+          logger: () => undefined,
+        });
+
+        await worker.setParameters({
+          tessedit_pageseg_mode: tesseract.PSM?.SPARSE_TEXT || "11",
+          preserve_interword_spaces: "1",
+          user_defined_dpi: "300",
+        });
+
+        return worker;
+      })();
+    }
+    return this.workerPromise;
+  }
+
+  async detectText(imageBuffer: Buffer): Promise<OcrResult> {
+    const worker = await this.worker();
+    const result = await worker.recognize(imageBuffer);
+    const data = result?.data || {};
+    const words: OcrBox[] = Array.isArray(data.words)
+      ? data.words.map((word: any) => ({
+          text: String(word.text || ""),
+          confidence: normalizeConfidence(word.confidence),
+          bbox: word.bbox
+            ? {
+                x0: Number(word.bbox.x0 || 0),
+                y0: Number(word.bbox.y0 || 0),
+                x1: Number(word.bbox.x1 || 0),
+                y1: Number(word.bbox.y1 || 0),
+              }
+            : undefined,
+        }))
+      : [];
+
+    return classifyOcrWords(words, {
+      provider: this.provider,
+      confidenceThreshold: this.confidenceThreshold,
+      minWordLength: this.minWordLength,
+      minTextFragments: this.minTextFragments,
+      rawText: String(data.text || ""),
+    });
   }
 }
 
@@ -75,13 +232,23 @@ class HttpOcrProvider implements OcrProvider {
       textDetected: Boolean(payload.textDetected),
       text: String(payload.text || ""),
       confidence: Number(payload.confidence || 0),
+      boxes: Array.isArray(payload.boxes)
+        ? payload.boxes.map((box: any) => ({
+            text: String(box.text || ""),
+            confidence: normalizeConfidence(box.confidence),
+            bbox: box.bbox,
+          }))
+        : [],
       provider: String(payload.provider || this.provider),
     };
   }
 }
 
 export function createOcrProvider(env: NodeJS.ProcessEnv = process.env): OcrProvider {
-  const provider = (env.IMAGE_OCR_PROVIDER || "").toLowerCase();
+  const provider = (env.IMAGE_OCR_PROVIDER || "disabled").toLowerCase();
+  if (provider === "local_tesseract") {
+    return new LocalTesseractOcrProvider(env);
+  }
   if (provider === "http") {
     const url = env.IMAGE_OCR_URL || "";
     if (!url) throw new Error("IMAGE_OCR_URL is required when IMAGE_OCR_PROVIDER=http");
@@ -189,6 +356,7 @@ export async function analyzeImagePixels(
     textDetected: false,
     text: "",
     confidence: 0,
+    boxes: [],
     provider: ocrProvider.provider,
     error: error instanceof Error ? error.message : String(error),
   }));

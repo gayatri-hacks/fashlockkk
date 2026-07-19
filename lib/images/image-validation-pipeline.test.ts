@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createImageGenerator, RetryableImageGenerationError } from "@/lib/images/image-generator";
-import { analyzeImagePixels, type OcrProvider } from "@/lib/images/image-pixel-analysis";
-import { unavailableSemanticValidation } from "@/lib/images/image-semantic-validator";
+import { analyzeImagePixels, classifyOcrWords, createOcrProvider, type OcrProvider } from "@/lib/images/image-pixel-analysis";
+import { createImageSemanticValidator, unavailableSemanticValidation } from "@/lib/images/image-semantic-validator";
 import { buildTrendImageBrief } from "@/lib/images/trend-image-brief";
 import {
   candidateFactsFromAnalysis,
@@ -14,9 +15,29 @@ import { isTrendImageAutoEnqueueEnabled } from "@/lib/trends/config";
 const noTextOcr: OcrProvider = {
   provider: "stub",
   async detectText() {
-    return { available: true, textDetected: false, text: "", confidence: 0.99, provider: "stub" };
+    return { available: true, textDetected: false, text: "", confidence: 0.99, boxes: [], provider: "stub" };
   },
 };
+
+function validSemanticPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    available: true,
+    keywordMatch: 0.92,
+    fashionRelevance: 0.9,
+    materialRealism: 0.86,
+    compositionQuality: 0.84,
+    requiredCuesPresent: true,
+    forbiddenCuesPresent: false,
+    textDetected: false,
+    logoDetected: false,
+    subjectDescription: "a realistic fashion textile product photograph",
+    materialDescription: "woven fabric with believable construction",
+    rejectionReasons: [],
+    confidence: 0.88,
+    provider: "stub",
+    ...overrides,
+  };
+}
 
 test("pixel validation decodes real image bytes and derives a pixel perceptual hash", async () => {
   const sharp = (await import("sharp")).default;
@@ -55,6 +76,159 @@ test("unavailable semantic validation prevents concept image approval", async ()
 
   assert.equal(result.passed, false);
   assert.ok(result.rejectionReasons.some((reason) => reason.includes("semantic")));
+});
+
+test("local OCR classification detects real text-like words", () => {
+  const result = classifyOcrWords([
+    { text: "FASHLOCK", confidence: 0.91, bbox: { x0: 10, y0: 10, x1: 80, y1: 26 } },
+  ], { provider: "local_tesseract", confidenceThreshold: 0.72 });
+
+  assert.equal(result.available, true);
+  assert.equal(result.textDetected, true);
+  assert.equal(result.boxes.length, 1);
+});
+
+test("local OCR classification lets clean textile imagery pass the text check", () => {
+  const result = classifyOcrWords([], { provider: "local_tesseract", confidenceThreshold: 0.72 });
+
+  assert.equal(result.textDetected, false);
+  assert.equal(result.text, "");
+});
+
+test("local OCR classification avoids false positives on low-confidence pattern fragments", () => {
+  const result = classifyOcrWords([
+    { text: "lll", confidence: 0.22 },
+    { text: "xx", confidence: 0.81 },
+  ], { provider: "local_tesseract", confidenceThreshold: 0.72, minWordLength: 3 });
+
+  assert.equal(result.textDetected, false);
+});
+
+test("unavailable OCR cannot approve a concept image", async () => {
+  const sharp = (await import("sharp")).default;
+  const brief = buildTrendImageBrief("denim");
+  const imageBuffer = await sharp({
+    create: {
+      width: 1024,
+      height: 1280,
+      channels: 3,
+      background: "#325f92",
+    },
+  }).png().toBuffer();
+  const pixel = await analyzeImagePixels(imageBuffer, { ocrProvider: createOcrProvider({ IMAGE_OCR_PROVIDER: "disabled" } as unknown as NodeJS.ProcessEnv) });
+  const semantic = validSemanticPayload({ provider: "stub" }) as any;
+  const facts = candidateFactsFromAnalysis({ brief, pixel, semantic, candidateIndex: 0 });
+  const result = validateTrendConceptCandidate({ brief, facts });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.rejectionReasons.some((reason) => reason.includes("OCR")));
+});
+
+test("Cloudflare semantic validator accepts strict JSON from direct REST response", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    result: { response: JSON.stringify(validSemanticPayload()) },
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+  try {
+    const validator = createImageSemanticValidator({
+      IMAGE_SEMANTIC_VALIDATOR_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      CLOUDFLARE_VISION_MODEL: "@cf/meta/llama-vision",
+    } as unknown as NodeJS.ProcessEnv);
+    const result = await validator.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: Buffer.from("image"), candidateIndex: 0 });
+
+    assert.equal(result.available, true);
+    assert.equal(result.provider, "cloudflare");
+    assert.equal(result.requiredCuesPresent, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Cloudflare semantic validator rejects invalid JSON safely", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    result: { response: "this is not json" },
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+  try {
+    const validator = createImageSemanticValidator({
+      IMAGE_SEMANTIC_VALIDATOR_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      CLOUDFLARE_VISION_MODEL: "@cf/meta/llama-vision",
+    } as unknown as NodeJS.ProcessEnv);
+    const result = await validator.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: Buffer.from("image"), candidateIndex: 0 });
+
+    assert.equal(result.available, false);
+    assert.ok(result.rejectionReasons.some((reason) => reason.includes("non-JSON")));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Cloudflare semantic validator treats quota as retryable", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response("quota", {
+    status: 429,
+    headers: { "retry-after": "90" },
+  })) as typeof fetch;
+
+  try {
+    const validator = createImageSemanticValidator({
+      IMAGE_SEMANTIC_VALIDATOR_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      CLOUDFLARE_VISION_MODEL: "@cf/meta/llama-vision",
+    } as unknown as NodeJS.ProcessEnv);
+
+    await assert.rejects(
+      () => validator.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: Buffer.from("image"), candidateIndex: 0 }),
+      (error) => error instanceof RetryableImageGenerationError && error.retryAfterSeconds === 90,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Gemini semantic fallback runs only when explicitly configured", async () => {
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    const requestUrl = String(url);
+    urls.push(requestUrl);
+    if (requestUrl.includes("validator.example.test")) {
+      return new Response("offline", { status: 503 });
+    }
+    return new Response(JSON.stringify({
+      candidates: [{ content: { parts: [{ text: JSON.stringify(validSemanticPayload({ provider: "gemini" })) }] } }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    const noFallback = createImageSemanticValidator({
+      IMAGE_SEMANTIC_VALIDATOR_PROVIDER: "http",
+      IMAGE_SEMANTIC_VALIDATOR_URL: "https://validator.example.test",
+    } as unknown as NodeJS.ProcessEnv);
+    const failed = await noFallback.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: Buffer.from("image"), candidateIndex: 0 });
+    assert.equal(failed.available, false);
+    assert.equal(urls.length, 1);
+
+    const withFallback = createImageSemanticValidator({
+      IMAGE_SEMANTIC_VALIDATOR_PROVIDER: "http",
+      IMAGE_SEMANTIC_VALIDATOR_URL: "https://validator.example.test",
+      IMAGE_SEMANTIC_VALIDATOR_FALLBACK_PROVIDER: "gemini",
+      GEMINI_API_KEY: "gemini-key",
+    } as unknown as NodeJS.ProcessEnv);
+    const recovered = await withFallback.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: Buffer.from("image"), candidateIndex: 0 });
+    assert.equal(recovered.available, true);
+    assert.equal(recovered.provider, "gemini");
+    assert.equal(urls.length, 3);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("semantic validation rejects floral bouquet instead of fashion textile", async () => {
@@ -169,6 +343,15 @@ test("Cloudflare quota responses are retryable and do not produce an image", asy
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("migration 025 remains additive and avoids destructive replacement", () => {
+  const sql = readFileSync("database/025_trend_concept_pixel_validation.sql", "utf8").toLowerCase();
+
+  assert.equal(/\bdrop\b|\bdelete\b|\btruncate\b/.test(sql), false);
+  assert.equal(/create\s+or\s+replace\s+function/.test(sql), false);
+  assert.ok(sql.includes("add column if not exists"));
+  assert.ok(sql.includes("create index if not exists"));
 });
 
 test("all failed candidates select no image, preserving the current production image", () => {

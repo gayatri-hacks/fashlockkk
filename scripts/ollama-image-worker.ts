@@ -259,7 +259,7 @@ async function markRetryableReview(job: ImageGenerationJob, error: RetryableImag
   const { error: updateError } = await supabase
     .from("image_generation_jobs")
     .update({
-      status: "retryable_review",
+      status: "pending",
       locked_at: null,
       locked_by: null,
       error_message: message,
@@ -273,7 +273,7 @@ async function markRetryableReview(job: ImageGenerationJob, error: RetryableImag
     .eq("id", job.id);
 
   if (updateError) {
-    await markFailed(job, new Error(`retryable_review unsupported: ${message}`));
+    await markFailed(job, new Error(`retryable review update failed: ${message}`));
   }
 }
 
@@ -518,6 +518,24 @@ async function processTrendConceptJob(job: ImageGenerationJob) {
   });
 
   if (completeError) throw completeError;
+
+  const { error: metadataUpdateError } = await supabase
+    .from("generated_fashion_images")
+    .update({
+      dominant_colors: selected.facts.dominantColors || [],
+      pixel_integrity_hash: selected.facts.pixelIntegrityHash,
+      generator_provider: validationMetadata.generatorProvider,
+      generator_model: validationMetadata.generatorModel,
+      approved_at: new Date().toISOString(),
+    })
+    .eq("entity_type", job.entity_type)
+    .eq("entity_id", job.entity_id)
+    .eq("variant", job.variant)
+    .eq("prompt_hash", job.prompt_hash);
+
+  if (metadataUpdateError) {
+    console.warn(`Accepted image metadata update skipped for job ${job.id}: ${metadataUpdateError.message}`);
+  }
 }
 
 async function main() {
@@ -553,6 +571,7 @@ async function main() {
       console.error(`Job ${job.id} failed: ${error instanceof Error ? error.message : String(error)}`);
       if (error instanceof RetryableImageGenerationError) {
         await markRetryableReview(job, error);
+        stopping = true;
       } else {
         await markFailed(job, error);
       }
