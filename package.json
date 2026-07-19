@@ -16,6 +16,7 @@
     "trends:plan-concept-regeneration": "tsx scripts/plan-trend-concept-regeneration.ts",
     "trends:audit-concept-images": "tsx scripts/plan-trend-concept-regeneration.ts",
     "images:enqueue": "tsx scripts/enqueue-trend-images.ts",
+    "images:smoke:cloudflare": "tsx scripts/cloudflare-image-pipeline-smoke-test.ts",
     "images:verify-migrations": "tsx scripts/verify-trend-concept-image-migrations.ts",
     "images:worker": "tsx scripts/ollama-image-worker.ts"
   },

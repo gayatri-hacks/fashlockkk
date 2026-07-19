@@ -58,6 +58,36 @@ function imageFromUnknownPayload(payload: any) {
   return Buffer.from(base64.replace(/^data:image\/\w+;base64,/, ""), "base64");
 }
 
+function cloudflareModelRunUrl(accountId: string, model: string) {
+  return `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/${model}`;
+}
+
+function parseImageSize(imageSize: string) {
+  const match = imageSize.match(/^(\d+)x(\d+)$/i);
+  if (!match) return { width: 1024, height: 1280 };
+  return {
+    width: Math.max(256, Math.min(2048, Number(match[1]))),
+    height: Math.max(256, Math.min(2048, Number(match[2]))),
+  };
+}
+
+function isMultipartCloudflareImageModel(model: string) {
+  return model.includes("flux-2-klein");
+}
+
+function cloudflareImageRequestBody(input: GenerateImageInput, model: string): { headers: Record<string, string>; body: BodyInit } {
+  if (!isMultipartCloudflareImageModel(model)) {
+    return { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: input.prompt, seed: input.seed }) };
+  }
+
+  const form = new FormData();
+  const { width, height } = parseImageSize(input.imageSize);
+  form.set("prompt", input.prompt);
+  form.set("width", String(width));
+  form.set("height", String(height));
+  return { headers: {}, body: form };
+}
+
 class OllamaImageGenerator implements ImageGenerator {
   readonly provider = "ollama" as const;
 
@@ -122,16 +152,17 @@ class CloudflareImageGenerator implements ImageGenerator {
   async generate(input: GenerateImageInput): Promise<GeneratedImage> {
     const timer = timeoutSignal(this.timeoutMs);
     const model = this.model || input.model;
+    const request = cloudflareImageRequestBody(input, model);
     try {
       const response = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/ai/run/${encodeURIComponent(model)}`,
+        cloudflareModelRunUrl(this.accountId, model),
         {
           method: "POST",
           headers: {
             Authorization: `Bearer ${this.apiToken}`,
-            "Content-Type": "application/json",
+            ...request.headers,
           },
-          body: JSON.stringify({ prompt: input.prompt, seed: input.seed }),
+          body: request.body,
           signal: timer.controller.signal,
         },
       );
@@ -141,6 +172,10 @@ class CloudflareImageGenerator implements ImageGenerator {
           "Cloudflare image generation quota exhausted",
           parseRetryAfter(response.headers.get("retry-after")),
         );
+      }
+
+      if (response.status === 401 || response.status === 403) {
+        throw new Error(`Cloudflare image generation authentication failed with ${response.status}`);
       }
 
       if (!response.ok) throw new Error(`Cloudflare image generation returned ${response.status}`);

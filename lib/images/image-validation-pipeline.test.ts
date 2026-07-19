@@ -127,9 +127,13 @@ test("unavailable OCR cannot approve a concept image", async () => {
 
 test("Cloudflare semantic validator accepts strict JSON from direct REST response", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => new Response(JSON.stringify({
+  let requestPayload: any = null;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    requestPayload = JSON.parse(String(init?.body || "{}"));
+    return new Response(JSON.stringify({
     result: { response: JSON.stringify(validSemanticPayload()) },
-  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
 
   try {
     const validator = createImageSemanticValidator({
@@ -143,6 +147,10 @@ test("Cloudflare semantic validator accepts strict JSON from direct REST respons
     assert.equal(result.available, true);
     assert.equal(result.provider, "cloudflare");
     assert.equal(result.requiredCuesPresent, true);
+    assert.equal(typeof requestPayload.image, "string");
+    assert.equal(requestPayload.image.startsWith("data:image/png;base64,"), true);
+    assert.equal(Array.isArray(requestPayload.messages[1].content), false);
+    assert.ok(requestPayload.guided_json);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -344,6 +352,93 @@ test("Cloudflare quota responses are retryable and do not produce an image", asy
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("Cloudflare FLUX image generation uses multipart form data and parses image bytes", async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedBody: BodyInit | null | undefined = null;
+  let capturedHeaders: HeadersInit | undefined;
+  const base64Image = Buffer.alloc(256, 7).toString("base64");
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    capturedBody = init?.body;
+    capturedHeaders = init?.headers;
+    return new Response(JSON.stringify({
+      result: { image: base64Image },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    const cloudflare = createImageGenerator({
+      IMAGE_GENERATION_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      CLOUDFLARE_IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-9b",
+    } as unknown as NodeJS.ProcessEnv);
+
+    const image = await cloudflare.generate({ prompt: "test prompt", model: "ignored", imageSize: "1024x1280" });
+    const form = capturedBody as unknown as FormData;
+    assert.equal(image.provider, "cloudflare");
+    assert.equal(image.buffer.length, 256);
+    assert.ok(form instanceof FormData);
+    assert.equal(form.get("prompt"), "test prompt");
+    assert.equal(form.get("width"), "1024");
+    assert.equal(form.get("height"), "1280");
+    assert.equal((capturedHeaders as Record<string, string>)["Content-Type"], undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Cloudflare image generation reports authentication failure clearly", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response("unauthorized", { status: 401 })) as typeof fetch;
+
+  try {
+    const cloudflare = createImageGenerator({
+      IMAGE_GENERATION_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "bad-token",
+      CLOUDFLARE_IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-9b",
+    } as unknown as NodeJS.ProcessEnv);
+
+    await assert.rejects(
+      () => cloudflare.generate({ prompt: "test", model: "ignored", imageSize: "1024x1280" }),
+      /authentication failed/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Cloudflare image generation rejects malformed image responses", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    result: { message: "ok but no image" },
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+  try {
+    const cloudflare = createImageGenerator({
+      IMAGE_GENERATION_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      CLOUDFLARE_IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-9b",
+    } as unknown as NodeJS.ProcessEnv);
+
+    await assert.rejects(
+      () => cloudflare.generate({ prompt: "test", model: "ignored", imageSize: "1024x1280" }),
+      /did not include base64 image data/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Cloudflare smoke test script does not import Supabase or production queue code", () => {
+  const source = readFileSync("scripts/cloudflare-image-pipeline-smoke-test.ts", "utf8");
+
+  assert.equal(source.includes("@supabase/supabase-js"), false);
+  assert.equal(source.includes("image_generation_jobs"), false);
+  assert.equal(source.includes("claim_next_image_generation_job"), false);
 });
 
 test("migration 025 remains additive and avoids destructive replacement", () => {

@@ -98,6 +98,43 @@ function semanticPrompt(brief: TrendImageBrief, candidateIndex: number) {
   ].join("\n");
 }
 
+const SEMANTIC_GUIDED_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    keywordMatch: { type: "number", minimum: 0, maximum: 1 },
+    fashionRelevance: { type: "number", minimum: 0, maximum: 1 },
+    materialRealism: { type: "number", minimum: 0, maximum: 1 },
+    compositionQuality: { type: "number", minimum: 0, maximum: 1 },
+    requiredCuesPresent: { type: "boolean" },
+    forbiddenCuesPresent: { type: "boolean" },
+    textDetected: { type: "boolean" },
+    logoDetected: { type: "boolean" },
+    subjectDescription: { type: "string" },
+    materialDescription: { type: "string" },
+    rejectionReasons: { type: "array", items: { type: "string" } },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+  },
+  required: [
+    "keywordMatch",
+    "fashionRelevance",
+    "materialRealism",
+    "compositionQuality",
+    "requiredCuesPresent",
+    "forbiddenCuesPresent",
+    "textDetected",
+    "logoDetected",
+    "subjectDescription",
+    "materialDescription",
+    "rejectionReasons",
+    "confidence",
+  ],
+};
+
+function cloudflareVisionImagePayload(imageBuffer: Buffer) {
+  return `data:image/png;base64,${imageBuffer.toString("base64")}`;
+}
+
 function extractResponseText(payload: any): string {
   if (typeof payload === "string") return payload;
   if (typeof payload?.result?.response === "string") return payload.result.response;
@@ -227,15 +264,18 @@ class CloudflareSemanticValidator implements ImageSemanticValidator {
       body: JSON.stringify({
         messages: [
           {
+            role: "system",
+            content: "Return strict JSON only. Do not include markdown, prose, comments or extra keys.",
+          },
+          {
             role: "user",
-            content: [
-              { type: "text", text: semanticPrompt(input.brief, input.candidateIndex) },
-              { type: "image", image: input.imageBuffer.toString("base64") },
-            ],
+            content: semanticPrompt(input.brief, input.candidateIndex),
           },
         ],
+        image: cloudflareVisionImagePayload(input.imageBuffer),
         max_tokens: 700,
         temperature: 0,
+        guided_json: SEMANTIC_GUIDED_JSON_SCHEMA,
       }),
     }, this.timeoutMs);
 

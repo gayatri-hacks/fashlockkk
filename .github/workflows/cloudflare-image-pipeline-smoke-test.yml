@@ -1,0 +1,73 @@
+name: Cloudflare Image Pipeline Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      keyword:
+        description: Fixed trend keyword for the one-candidate smoke test.
+        required: false
+        default: oversized
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-image-pipeline-smoke-test-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  smoke-test:
+    name: Generate and validate one temporary Cloudflare image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_IMAGE_MODEL: ${{ vars.CLOUDFLARE_IMAGE_MODEL }}
+      CLOUDFLARE_VISION_MODEL: ${{ vars.CLOUDFLARE_VISION_MODEL }}
+      IMAGE_OCR_PROVIDER: ${{ vars.IMAGE_OCR_PROVIDER }}
+      IMAGE_SEMANTIC_VALIDATOR_FALLBACK_PROVIDER: disabled
+      SMOKE_TEST_KEYWORD: ${{ inputs.keyword }}
+      SMOKE_TEST_OUTPUT_DIR: .tmp/cloudflare-image-smoke-test
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Tesseract runtime
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Validate smoke-test configuration
+        run: |
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo "CLOUDFLARE_ACCOUNT_ID secret is required" && exit 1)
+          test -n "$CLOUDFLARE_API_TOKEN" || (echo "CLOUDFLARE_API_TOKEN secret is required" && exit 1)
+          test -n "$CLOUDFLARE_IMAGE_MODEL" || (echo "CLOUDFLARE_IMAGE_MODEL repository variable is required" && exit 1)
+          test -n "$CLOUDFLARE_VISION_MODEL" || (echo "CLOUDFLARE_VISION_MODEL repository variable is required" && exit 1)
+          test "${IMAGE_OCR_PROVIDER:-local_tesseract}" = "local_tesseract" || (echo "IMAGE_OCR_PROVIDER must be local_tesseract for this smoke test" && exit 1)
+
+      - name: Run Cloudflare image pipeline smoke test
+        env:
+          IMAGE_OCR_PROVIDER: local_tesseract
+        run: npm run images:smoke:cloudflare
+
+      - name: Upload redacted smoke-test artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-image-pipeline-smoke-test
+          path: .tmp/cloudflare-image-smoke-test
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Clean up temporary smoke-test files
+        if: always()
+        run: rm -rf .tmp/cloudflare-image-smoke-test
