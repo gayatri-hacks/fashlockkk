@@ -1,6 +1,8 @@
 #!/usr/bin/env tsx
 import "./load-env";
 import { getSupabaseClient } from "../lib/supabase";
+import { analyzeImagePixels, createOcrProvider, downloadImagePixels } from "../lib/images/image-pixel-analysis";
+import { createImageSemanticValidator } from "../lib/images/image-semantic-validator";
 import { TREND_COMPUTATION_VERSION } from "../lib/trends/config";
 import { buildTrendImageBrief } from "../lib/images/trend-image-brief";
 import {
@@ -38,6 +40,16 @@ type GeneratedImageRow = {
   perceptual_hash?: string | null;
   completed_at?: string | null;
 };
+
+type AuditStatus =
+  | "metadata_match"
+  | "needs_deterministic_review"
+  | "needs_semantic_review"
+  | "approved"
+  | "regenerate"
+  | "false_positive_alias"
+  | "legacy_unreviewed"
+  | "technical_failure";
 
 function asStringArray(value: unknown) {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
@@ -88,6 +100,10 @@ function imageKeyword(image: GeneratedImageRow) {
 async function main() {
   const supabase = getSupabaseClient();
   if (!supabase) throw new Error("Supabase service credentials are required");
+  const metadataOnly = process.argv.includes("--metadata-only");
+  const semanticReview = process.argv.includes("--semantic-review");
+  const ocrProvider = createOcrProvider();
+  const semanticValidator = semanticReview ? createImageSemanticValidator() : null;
 
   const { data: scoreRows, error: scoreError } = await supabase
     .from("global_trend_scores")
@@ -115,12 +131,28 @@ async function main() {
   }
 
   const acceptedContexts: Array<{ id: number; hash: string; compositionMode: string; palette: string }> = [];
-  const regenerationList = rows.flatMap((row, index) => {
+  const regenerationList = [];
+  const auditRows: Array<{
+    position: number;
+    entityId: number;
+    canonicalKeyword: string;
+    displayName: string;
+    status: AuditStatus;
+    imageUrl: string | null;
+    reviewStatus: string | null;
+    reasons: string[];
+    commandAfterApproval?: string;
+  }> = [];
+
+  for (const [index, row] of rows.entries()) {
     const id = Number(row.primary_keyword_id);
     const image = latestImageById.get(id);
     const bundle = bundleForRow(row);
     const nameValidation = validateEditorialNameSafety(String(row.editorial_display_name || ""), bundle);
     const reasons: string[] = [];
+    let status: AuditStatus = "metadata_match";
+    let semanticReviewedThisRun = false;
+    let semanticReviewUnavailable = false;
     const brief = buildTrendImageBrief(String(row.canonical_keyword));
 
     if (!nameValidation.ok) {
@@ -128,20 +160,64 @@ async function main() {
     }
     if (!image) {
       reasons.push("missing trend_concept image");
+      status = "regenerate";
     } else {
       const facts = selectedFacts(image);
       const storedKeyword = imageKeyword(image);
       if (storedKeyword && !trendConceptKeywordsMatch(storedKeyword, String(row.canonical_keyword))) {
         reasons.push(`image keyword mismatch: image=${storedKeyword} trend=${row.canonical_keyword}`);
+      } else if (storedKeyword && storedKeyword !== String(row.canonical_keyword).toLowerCase()) {
+        status = "false_positive_alias";
       }
-      if (facts.textDetected) reasons.push("OCR/text detected in selected image");
-      if (toNumber(facts.materialRealism) > 0 && toNumber(facts.materialRealism) < TREND_CONCEPT_ACCEPTANCE_THRESHOLDS.materialRealism) {
-        reasons.push(`material quality below threshold: ${toNumber(facts.materialRealism).toFixed(2)}`);
+      let pixelHash = String(image.perceptual_hash || facts.perceptualHash || "");
+      let pixelPalette = String(image.dominant_palette || facts.dominantPalette || brief.paletteFamily);
+      if (metadataOnly) {
+        status = "needs_deterministic_review";
+        if (facts.textDetected) reasons.push("OCR/text detected in selected image");
+        if (toNumber(facts.materialRealism) > 0 && toNumber(facts.materialRealism) < TREND_CONCEPT_ACCEPTANCE_THRESHOLDS.materialRealism) {
+          reasons.push(`material quality below threshold: ${toNumber(facts.materialRealism).toFixed(2)}`);
+        }
+      } else {
+        try {
+          const imageBuffer = await downloadImagePixels(image.image_url);
+          const pixel = await analyzeImagePixels(imageBuffer, { ocrProvider });
+          pixelHash = pixel.perceptualHash;
+          pixelPalette = pixel.dominantPalette;
+          if (!pixel.ocr.available) reasons.push("OCR provider unavailable for pixel audit");
+          if (pixel.ocr.textDetected) reasons.push("OCR/text detected in selected image");
+          if (pixel.sharpness < TREND_CONCEPT_ACCEPTANCE_THRESHOLDS.sharpness) reasons.push(`pixel sharpness below threshold: ${pixel.sharpness.toFixed(2)}`);
+          if (pixel.overexposed) reasons.push("pixel audit detected overexposure");
+          if (pixel.underexposed) reasons.push("pixel audit detected underexposure");
+          if (Math.abs(pixel.aspectRatio - TREND_CONCEPT_ACCEPTANCE_THRESHOLDS.aspectRatio) > TREND_CONCEPT_ACCEPTANCE_THRESHOLDS.aspectRatioTolerance) {
+            reasons.push(`pixel aspect ratio is not 4:5: ${pixel.aspectRatio.toFixed(3)}`);
+          }
+          if (semanticValidator) {
+            const semantic = await semanticValidator.validate({ brief, imageBuffer, candidateIndex: 0 });
+            if (!semantic.available) {
+              semanticReviewUnavailable = true;
+              reasons.push(`semantic review unavailable: ${semantic.error || semantic.provider}`);
+            } else {
+              semanticReviewedThisRun = true;
+              if (semantic.keywordMatch < TREND_CONCEPT_ACCEPTANCE_THRESHOLDS.keywordMatch) reasons.push(`keywordMatch ${semantic.keywordMatch.toFixed(2)} below threshold`);
+              if (semantic.fashionRelevance < TREND_CONCEPT_ACCEPTANCE_THRESHOLDS.fashionRelevance) reasons.push(`fashionRelevance ${semantic.fashionRelevance.toFixed(2)} below threshold`);
+              if (semantic.materialRealism < TREND_CONCEPT_ACCEPTANCE_THRESHOLDS.materialRealism) reasons.push(`materialRealism ${semantic.materialRealism.toFixed(2)} below threshold`);
+              if (semantic.compositionQuality < TREND_CONCEPT_ACCEPTANCE_THRESHOLDS.compositionQuality) reasons.push(`compositionQuality ${semantic.compositionQuality.toFixed(2)} below threshold`);
+              if (semantic.confidence < TREND_CONCEPT_ACCEPTANCE_THRESHOLDS.semanticConfidence) reasons.push(`semantic confidence ${semantic.confidence.toFixed(2)} below threshold`);
+              if (!semantic.requiredCuesPresent) reasons.push("missing required visual cue");
+              if (semantic.forbiddenCuesPresent) reasons.push("forbidden visual cue");
+              if (semantic.textDetected) reasons.push("semantic text detection");
+              if (semantic.logoDetected) reasons.push("semantic logo/watermark detection");
+            }
+          }
+        } catch (error) {
+          reasons.push(`pixel audit failed: ${error instanceof Error ? error.message : String(error)}`);
+          status = "technical_failure";
+        }
       }
       if (Array.isArray(facts.missingRequiredCues) && facts.missingRequiredCues.length) {
         reasons.push(`semantic cues missing: ${facts.missingRequiredCues.join(", ")}`);
       }
-      const hash = String(image.perceptual_hash || facts.perceptualHash || "");
+      const hash = pixelHash;
       const adjacentDuplicate = hash
         ? acceptedContexts.slice(-2).find((context) => hammingSimilarity(context.hash, hash) >= TREND_CONCEPT_ACCEPTANCE_THRESHOLDS.duplicateSimilarity)
         : null;
@@ -152,29 +228,79 @@ async function main() {
           id,
           hash,
           compositionMode: String(image.composition_mode || facts.compositionMode || brief.compositionMode),
-          palette: String(image.dominant_palette || facts.dominantPalette || brief.paletteFamily),
+          palette: pixelPalette,
         });
       }
     }
 
-    if (!reasons.length) return [];
-    return [{
+    if (status !== "technical_failure" && reasons.length) {
+      status = semanticReviewUnavailable
+        ? "needs_semantic_review"
+        : reasons.some((reason) => /OCR provider unavailable|pixel audit failed/i.test(reason))
+        ? "technical_failure"
+        : "regenerate";
+    }
+
+    if (image && status === "metadata_match") {
+      const facts = selectedFacts(image);
+      const semanticReviewed = Boolean(
+        image.review_status === "accepted" &&
+        (facts.semanticProvider || toNumber(facts.semanticConfidence) >= TREND_CONCEPT_ACCEPTANCE_THRESHOLDS.semanticConfidence),
+      ) || semanticReviewedThisRun;
+      status = semanticReviewed ? "approved" : image.review_status === "legacy" ? "legacy_unreviewed" : "needs_semantic_review";
+    }
+
+    if (image && (status === "false_positive_alias" || status === "legacy_unreviewed")) {
+      const facts = selectedFacts(image);
+      const semanticReviewed = Boolean(
+        image.review_status === "accepted" &&
+        (facts.semanticProvider || toNumber(facts.semanticConfidence) >= TREND_CONCEPT_ACCEPTANCE_THRESHOLDS.semanticConfidence),
+      ) || semanticReviewedThisRun;
+      if (!semanticReviewed) status = "needs_semantic_review";
+    }
+
+    const auditRow = {
       position: index + 1,
       entityId: id,
-      canonicalKeyword: row.canonical_keyword,
-      displayName: row.editorial_display_name,
+      canonicalKeyword: String(row.canonical_keyword),
+      displayName: String(row.editorial_display_name),
+      status,
       imageUrl: image?.image_url || null,
       reviewStatus: image?.review_status || null,
       reasons,
-      commandAfterApproval: `npm run images:enqueue -- --trend-id ${id} --variant trend_concept --force`,
-    }];
-  });
+      ...(status === "regenerate" ? { commandAfterApproval: `npm run images:enqueue -- --trend-id ${id} --variant trend_concept --force` } : {}),
+    };
+    auditRows.push(auditRow);
+
+    if (reasons.length) {
+      regenerationList.push(auditRow);
+    }
+  }
+
+  const byStatus = auditRows.reduce<Record<string, typeof auditRows>>((groups, row) => {
+    groups[row.status] ||= [];
+    groups[row.status].push(row);
+    return groups;
+  }, {});
 
   console.log(JSON.stringify({
     dryRun: true,
+    pixelAudit: !metadataOnly,
+    semanticReview,
     note: "No jobs were enqueued. Run only after editorial-name cleanup and human review.",
     scannedTrends: rows.length,
     regenerationCount: regenerationList.length,
+    report: {
+      safeToKeep: byStatus.approved || [],
+      regenerate: byStatus.regenerate || [],
+      needsSemanticReview: [
+        ...(byStatus.needs_semantic_review || []),
+        ...(byStatus.legacy_unreviewed || []),
+      ],
+      technicalFailure: byStatus.technical_failure || [],
+      falsePositiveAlias: byStatus.false_positive_alias || [],
+      needsDeterministicReview: byStatus.needs_deterministic_review || [],
+    },
     regenerationList,
   }, null, 2));
 }

@@ -2,12 +2,16 @@
 import "./load-env";
 import { createClient } from "@supabase/supabase-js";
 import { storagePathForFashionImage, type FashionImageVariant } from "../lib/images/build-fashion-image-prompt";
+import { createImageGenerator, RetryableImageGenerationError } from "../lib/images/image-generator";
+import { analyzeImagePixels, createOcrProvider } from "../lib/images/image-pixel-analysis";
+import { createImageSemanticValidator } from "../lib/images/image-semantic-validator";
 import { buildTrendImageBrief } from "../lib/images/trend-image-brief";
 import {
-  deterministicCandidateFacts,
+  candidateFactsFromAnalysis,
   rankTrendConceptCandidates,
   TREND_CONCEPT_VALIDATION_VERSION,
   validateTrendConceptCandidate,
+  type AcceptedTrendConceptContext,
   type TrendConceptValidationResult,
 } from "../lib/images/trend-concept-validation";
 
@@ -27,15 +31,18 @@ type ImageGenerationJob = {
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const workerId = process.env.IMAGE_WORKER_ID || `ollama-worker-${process.pid}`;
-const ollamaBaseUrl = (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434").replace(/\/$/, "");
+const workerId = process.env.IMAGE_WORKER_ID || `image-worker-${process.pid}`;
 const pollMs = Number(process.env.IMAGE_WORKER_POLL_MS || 5000);
-const timeoutMs = Number(process.env.IMAGE_WORKER_TIMEOUT_MS || 300000);
 const bucketName = "generated-fashion-images";
 const webpQuality = Number(process.env.IMAGE_WORKER_WEBP_QUALITY || 92);
 const trendConceptCandidateCount = Number(process.env.TREND_CONCEPT_CANDIDATE_COUNT || 3);
-const visionValidatorUrl = process.env.IMAGE_VISION_VALIDATOR_URL || "";
-const visionValidatorKey = process.env.IMAGE_VISION_VALIDATOR_KEY || "";
+const maxJobsArgIndex = process.argv.indexOf("--max-jobs");
+const maxJobs = Number(
+  maxJobsArgIndex >= 0 ? process.argv[maxJobsArgIndex + 1] : process.env.IMAGE_WORKER_MAX_JOBS || 0,
+);
+const imageGenerator = createImageGenerator();
+const semanticValidator = createImageSemanticValidator();
+const ocrProvider = createOcrProvider();
 
 let stopping = false;
 
@@ -62,15 +69,6 @@ const supabase = createClient(
     auth: { persistSession: false, autoRefreshToken: false },
   },
 );
-
-async function isOllamaReachable() {
-  try {
-    const response = await fetch(`${ollamaBaseUrl}/api/tags`, { cache: "no-store" });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
 
 async function claimJob() {
   const { data, error } = await supabase.rpc("claim_next_image_generation_job", {
@@ -138,48 +136,25 @@ async function encodeUploadImage(job: ImageGenerationJob, imageBuffer: Buffer) {
   }
 }
 
-async function generateImage(job: ImageGenerationJob) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(`${ollamaBaseUrl}/v1/images/generations`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: job.model,
-        prompt: job.prompt,
-        size: job.image_size,
-        response_format: "b64_json",
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Ollama returned ${response.status}`);
-    }
-
-    const payload = await response.json();
-    const base64 = payload?.data?.[0]?.b64_json;
-    if (!base64 || typeof base64 !== "string") {
-      throw new Error("Ollama response did not include b64_json image data");
-    }
-
-    return Buffer.from(base64, "base64");
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 function trendConceptPromptForCandidate(job: ImageGenerationJob, candidateIndex: number, feedback: string[]) {
   return [
     job.prompt,
     "",
     `Candidate generation round ${candidateIndex + 1}.`,
+    `Deterministic variation seed: ${Number(job.entity_id) * 100 + candidateIndex}.`,
     "Create a fresh visual solution for this exact canonical keyword and brief.",
     feedback.length ? `Previous validation feedback to avoid: ${feedback.join("; ")}.` : "",
     "Do not include letters, captions, logos, labels, watermarks or imitation writing.",
   ].filter(Boolean).join("\n");
+}
+
+async function generateImage(job: ImageGenerationJob, prompt = job.prompt, seed?: number) {
+  return imageGenerator.generate({
+    prompt,
+    model: job.model,
+    imageSize: job.image_size,
+    seed,
+  });
 }
 
 async function recordTrendConceptReview(job: ImageGenerationJob, payload: Record<string, unknown>) {
@@ -189,7 +164,11 @@ async function recordTrendConceptReview(job: ImageGenerationJob, payload: Record
       entity_type: job.entity_type,
       entity_id: job.entity_id,
       variant: job.variant,
+      canonical_keyword: payload.canonicalKeyword || job.metadata?.canonicalKeyword || job.metadata?.keyword || null,
       prompt_hash: job.prompt_hash,
+      prompt: payload.prompt || job.prompt,
+      generator_provider: payload.generatorProvider || imageGenerator.provider,
+      generator_model: payload.generatorModel || job.model,
       prompt_version: job.metadata?.promptVersion || null,
       brief_version: job.metadata?.briefVersion || null,
       review_status: payload.reviewStatus,
@@ -209,6 +188,9 @@ async function recordTrendConceptReview(job: ImageGenerationJob, payload: Record
           review_id: reviewId,
           job_id: job.id,
           candidate_index: Number(result.facts?.candidateIndex || 0),
+          prompt: result.prompt || null,
+          generator_provider: result.generatorProvider || imageGenerator.provider,
+          generator_model: result.generatorModel || job.model,
           passed: Boolean(result.passed),
           score: Number(result.score || 0),
           rejection_reasons: Array.isArray(result.rejectionReasons) ? result.rejectionReasons : [],
@@ -219,50 +201,6 @@ async function recordTrendConceptReview(job: ImageGenerationJob, payload: Record
     }
   } catch (error) {
     console.warn(`Trend concept review audit skipped for job ${job.id}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-async function callVisionSemanticValidator({
-  brief,
-  imageBuffer,
-  candidateIndex,
-}: {
-  brief: ReturnType<typeof buildTrendImageBrief>;
-  imageBuffer: Buffer;
-  candidateIndex: number;
-}) {
-  if (!visionValidatorUrl) return null;
-
-  try {
-    const response = await fetch(visionValidatorUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(visionValidatorKey ? { Authorization: `Bearer ${visionValidatorKey}` } : {}),
-      },
-      body: JSON.stringify({
-        validationVersion: TREND_CONCEPT_VALIDATION_VERSION,
-        candidateIndex,
-        brief,
-        imageBase64: imageBuffer.toString("base64"),
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`vision validator returned ${response.status}`);
-    }
-
-    return await response.json() as Partial<ReturnType<typeof deterministicCandidateFacts>>;
-  } catch (error) {
-    console.warn(`Vision semantic validator failed for candidate ${candidateIndex + 1}: ${error instanceof Error ? error.message : String(error)}`);
-    return {
-      keywordMatch: 0,
-      fashionRelevance: 0,
-      materialRealism: 0,
-      compositionQuality: 0,
-      forbiddenCueDetected: true,
-      detectedCues: ["vision-validator-unavailable"],
-    } as Partial<ReturnType<typeof deterministicCandidateFacts>>;
   }
 }
 
@@ -315,14 +253,111 @@ async function markFailed(job: ImageGenerationJob, error: unknown) {
   }
 }
 
+async function markRetryableReview(job: ImageGenerationJob, error: RetryableImageGenerationError) {
+  const retryAfter = new Date(Date.now() + (error.retryAfterSeconds || 86400) * 1000).toISOString();
+  const message = `${error.message}; retry after ${retryAfter}`;
+  const { error: updateError } = await supabase
+    .from("image_generation_jobs")
+    .update({
+      status: "retryable_review",
+      locked_at: null,
+      locked_by: null,
+      error_message: message,
+      metadata: {
+        ...(job.metadata || {}),
+        validationStatus: "retryable_review",
+        retryAfter,
+        retryReason: error.message,
+      },
+    })
+    .eq("id", job.id);
+
+  if (updateError) {
+    await markFailed(job, new Error(`retryable_review unsupported: ${message}`));
+  }
+}
+
+async function loadRecentlyAcceptedConceptContexts(currentEntityId: number): Promise<AcceptedTrendConceptContext[]> {
+  const { data, error } = await supabase
+    .from("generated_fashion_images")
+    .select("entity_id, dominant_palette, dominant_color, composition_mode, material_family, perceptual_hash, metadata, completed_at")
+    .eq("entity_type", "trend")
+    .eq("variant", "trend_concept")
+    .in("review_status", ["accepted", "legacy"])
+    .order("completed_at", { ascending: false })
+    .limit(24);
+
+  if (error) {
+    console.warn(`Could not load recent concept image context: ${error.message}`);
+    return [];
+  }
+
+  return ((data || []) as any[])
+    .filter((row) => Number(row.entity_id) !== currentEntityId)
+    .reverse()
+    .map((row) => {
+      const metadata = (row.metadata || {}) as Record<string, any>;
+      return {
+        compositionMode: String(row.composition_mode || metadata.compositionMode || ""),
+        materialFamily: String(row.material_family || metadata.materialFamily || ""),
+        paletteFamily: String(row.dominant_palette || metadata.dominantPalette || ""),
+        dominantColor: String(row.dominant_color || metadata.dominantColor || ""),
+        perceptualHash: String(row.perceptual_hash || metadata.perceptualHash || ""),
+      };
+    })
+    .filter((item) => item.compositionMode && item.materialFamily && item.paletteFamily && item.perceptualHash);
+}
+
+function failedCandidateValidation({
+  brief,
+  candidateIndex,
+  reason,
+}: {
+  brief: ReturnType<typeof buildTrendImageBrief>;
+  candidateIndex: number;
+  reason: string;
+}): TrendConceptValidationResult {
+  return {
+    passed: false,
+    score: 0,
+    rejectionReasons: [reason],
+    facts: {
+      candidateIndex,
+      keywordMatch: 0,
+      fashionRelevance: 0,
+      materialRealism: 0,
+      compositionQuality: 0,
+      semanticConfidence: 0,
+      sharpness: 0,
+      width: 0,
+      height: 0,
+      aspectRatio: 0,
+      overexposed: false,
+      underexposed: false,
+      ocrAvailable: false,
+      textDetected: false,
+      logoDetected: false,
+      personDetected: false,
+      requiredCuesPresent: false,
+      forbiddenCueDetected: true,
+      detectedCues: [],
+      missingRequiredCues: brief.requiredVisualCues,
+      dominantPalette: "",
+      dominantColor: "",
+      compositionMode: brief.compositionMode,
+      perceptualHash: "",
+    },
+  };
+}
+
 async function processJob(job: ImageGenerationJob) {
   if (job.variant === "trend_concept") {
     await processTrendConceptJob(job);
     return;
   }
 
-  const imageBuffer = await generateImage(job);
-  const uploadImage = await encodeUploadImage(job, imageBuffer);
+  const generated = await generateImage(job);
+  const uploadImage = await encodeUploadImage(job, generated.buffer);
   const storagePath =
     replaceStorageExtension(
       job.storage_path ||
@@ -352,8 +387,10 @@ async function processJob(job: ImageGenerationJob) {
     completed_storage_path: storagePath,
     completed_metadata: {
       workerId,
-      completedBy: "ollama",
-      ollamaBaseUrl,
+      completedBy: generated.provider,
+      generatorProvider: generated.provider,
+      generatorModel: generated.model,
+      generatorDescription: imageGenerator.describe(),
       contentType: uploadImage.contentType,
     },
   });
@@ -366,22 +403,34 @@ async function processTrendConceptJob(job: ImageGenerationJob) {
   const brief = buildTrendImageBrief(keyword);
   const validationResults: TrendConceptValidationResult[] = [];
   const generatedBuffers = new Map<number, Buffer>();
+  const generatedPrompts = new Map<number, string>();
   const feedback: string[] = [];
+  const recentlyAccepted = await loadRecentlyAcceptedConceptContexts(Number(job.entity_id));
 
   for (let candidateIndex = 0; candidateIndex < Math.max(1, trendConceptCandidateCount); candidateIndex += 1) {
-    const imageBuffer = await generateImage({
-      ...job,
-      prompt: trendConceptPromptForCandidate(job, candidateIndex, feedback.slice(-6)),
-    });
-    generatedBuffers.set(candidateIndex, imageBuffer);
+    const prompt = trendConceptPromptForCandidate(job, candidateIndex, feedback.slice(-6));
+    generatedPrompts.set(candidateIndex, prompt);
 
-    const facts = deterministicCandidateFacts({
-      brief,
-      buffer: imageBuffer,
-      candidateIndex,
-    });
-    const semanticFacts = await callVisionSemanticValidator({ brief, imageBuffer, candidateIndex });
-    const validation = validateTrendConceptCandidate({ brief, facts: { ...facts, ...semanticFacts } });
+    let validation: TrendConceptValidationResult;
+    try {
+      const generated = await generateImage(job, prompt, Number(job.entity_id) * 100 + candidateIndex);
+      generatedBuffers.set(candidateIndex, generated.buffer);
+
+      const pixel = await analyzeImagePixels(generated.buffer, { ocrProvider });
+      const semantic = await semanticValidator.validate({ brief, imageBuffer: generated.buffer, candidateIndex });
+      const facts = candidateFactsFromAnalysis({ brief, pixel, semantic, candidateIndex });
+      validation = validateTrendConceptCandidate({ brief, facts, recentlyAccepted });
+      (validation as any).generatorProvider = generated.provider;
+      (validation as any).generatorModel = generated.model;
+    } catch (error) {
+      if (error instanceof RetryableImageGenerationError) throw error;
+      validation = failedCandidateValidation({
+        brief,
+        candidateIndex,
+        reason: error instanceof Error ? `candidate validation failed: ${error.message}` : "candidate validation failed",
+      });
+    }
+    (validation as any).prompt = prompt;
     validationResults.push(validation);
 
     if (!validation.passed) {
@@ -423,12 +472,16 @@ async function processTrendConceptJob(job: ImageGenerationJob) {
 
   const validationMetadata = {
     workerId,
-    completedBy: "ollama",
-    ollamaBaseUrl,
+    completedBy: imageGenerator.provider,
+    generatorProvider: (selected as any).generatorProvider || imageGenerator.provider,
+    generatorModel: (selected as any).generatorModel || job.model,
+    generatorDescription: imageGenerator.describe(),
     contentType: uploadImage.contentType,
     reviewStatus: "accepted",
     validationStatus: "accepted",
     validationVersion: TREND_CONCEPT_VALIDATION_VERSION,
+    prompt: generatedPrompts.get(selected.facts.candidateIndex) || job.prompt,
+    canonicalKeyword: brief.canonicalKeyword,
     selectedCandidateIndex: selected.facts.candidateIndex,
     candidateCount: validationResults.length,
     selectedScore: selected.score,
@@ -437,12 +490,17 @@ async function processTrendConceptJob(job: ImageGenerationJob) {
     compositionMode: selected.facts.compositionMode,
     materialFamily: brief.materialFamily,
     perceptualHash: selected.facts.perceptualHash,
+    dominantColors: selected.facts.dominantColors || [],
+    pixelIntegrityHash: selected.facts.pixelIntegrityHash,
     trendImageBrief: brief,
     validationResults: validationResults.map((result) => ({
       passed: result.passed,
       score: result.score,
       rejectionReasons: result.rejectionReasons,
       facts: result.facts,
+      prompt: (result as any).prompt,
+      generatorProvider: (result as any).generatorProvider,
+      generatorModel: (result as any).generatorModel,
     })),
   };
 
@@ -464,11 +522,17 @@ async function processTrendConceptJob(job: ImageGenerationJob) {
 
 async function main() {
   await ensureBucket();
-  console.log(`Image worker ${workerId} using ${ollamaBaseUrl}`);
+  console.log(`Image worker ${workerId} using ${imageGenerator.describe()}`);
+  let processedJobs = 0;
 
   while (!stopping) {
-    if (!(await isOllamaReachable())) {
-      console.warn(`Ollama is not reachable at ${ollamaBaseUrl}; waiting.`);
+    if (maxJobs > 0 && processedJobs >= maxJobs) {
+      console.log(`Image worker processed configured max jobs: ${maxJobs}`);
+      break;
+    }
+
+    if (!(await imageGenerator.isReachable())) {
+      console.warn(`Image generator is not reachable at ${imageGenerator.describe()}; waiting.`);
       await sleep(pollMs);
       continue;
     }
@@ -483,10 +547,15 @@ async function main() {
 
     try {
       await processJob(job);
+      processedJobs += 1;
       console.log(`Completed job ${job.id}`);
     } catch (error) {
       console.error(`Job ${job.id} failed: ${error instanceof Error ? error.message : String(error)}`);
-      await markFailed(job, error);
+      if (error instanceof RetryableImageGenerationError) {
+        await markRetryableReview(job, error);
+      } else {
+        await markFailed(job, error);
+      }
     }
   }
 

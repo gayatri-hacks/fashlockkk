@@ -14,6 +14,7 @@
     "trends:verify-period-finalization": "tsx scripts/verify-trend-period-finalization.ts",
     "trends:cleanup-editorial-names": "tsx scripts/cleanup-editorial-names.ts",
     "trends:plan-concept-regeneration": "tsx scripts/plan-trend-concept-regeneration.ts",
+    "trends:audit-concept-images": "tsx scripts/plan-trend-concept-regeneration.ts",
     "images:enqueue": "tsx scripts/enqueue-trend-images.ts",
     "images:worker": "tsx scripts/ollama-image-worker.ts"
   },
@@ -31,6 +32,7 @@
     "react-dom": "^19.1.0",
     "recharts": "^2.15.3",
     "rss-parser": "^3.13.0",
+    "sharp": "^0.34.5",
     "tailwind-merge": "^3.3.1",
     "zod": "^3.25.42"
   },

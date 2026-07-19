@@ -1,7 +1,9 @@
 import { createHash } from "crypto";
+import type { ImagePixelAnalysis } from "@/lib/images/image-pixel-analysis";
+import type { ImageSemanticValidation } from "@/lib/images/image-semantic-validator";
 import type { TrendImageBrief } from "@/lib/images/trend-image-brief";
 
-export const TREND_CONCEPT_VALIDATION_VERSION = "trend-concept-validation-v1";
+export const TREND_CONCEPT_VALIDATION_VERSION = "trend-concept-validation-v2";
 
 export type TrendConceptCandidateFacts = {
   candidateIndex: number;
@@ -9,19 +11,32 @@ export type TrendConceptCandidateFacts = {
   fashionRelevance: number;
   materialRealism: number;
   compositionQuality: number;
+  semanticConfidence: number;
   sharpness: number;
   width: number;
   height: number;
+  aspectRatio: number;
+  overexposed: boolean;
+  underexposed: boolean;
+  ocrAvailable: boolean;
   textDetected: boolean;
   logoDetected: boolean;
   personDetected: boolean;
+  requiredCuesPresent: boolean;
   forbiddenCueDetected: boolean;
   detectedCues: string[];
   missingRequiredCues: string[];
   dominantPalette: string;
   dominantColor: string;
+  dominantColors?: string[];
   compositionMode: string;
   perceptualHash: string;
+  pixelIntegrityHash?: string;
+  subjectDescription?: string;
+  materialDescription?: string;
+  semanticProvider?: string;
+  ocrProvider?: string;
+  ocrText?: string;
 };
 
 export type AcceptedTrendConceptContext = {
@@ -44,10 +59,13 @@ export const TREND_CONCEPT_ACCEPTANCE_THRESHOLDS = {
   fashionRelevance: 0.8,
   materialRealism: 0.78,
   compositionQuality: 0.75,
+  semanticConfidence: 0.75,
   sharpness: 0.25,
   duplicateSimilarity: 0.9,
   minWidth: 768,
   minHeight: 960,
+  aspectRatio: 0.8,
+  aspectRatioTolerance: 0.04,
 };
 
 function normalized(value: string) {
@@ -92,6 +110,9 @@ export function collectionDiversityRejections({
   if (repeatedAdjacentCount(lastTwo.map((item) => item.paletteFamily), brief.paletteFamily) >= 2) {
     reasons.push(`palette repeats adjacent ${brief.paletteFamily}`);
   }
+  if (facts.dominantPalette === "beige/taupe" && repeatedAdjacentCount(lastTwo.map((item) => item.paletteFamily), "beige/taupe") >= 2) {
+    reasons.push("beige/taupe palette repeats adjacent cards");
+  }
 
   const flatLays = recentlyAccepted.filter((item) => item.compositionMode === "top-down flat-lay").length;
   if (facts.compositionMode === "top-down flat-lay" && (flatLays + 1) / Math.max(1, recentlyAccepted.length + 1) > 0.25) {
@@ -120,11 +141,17 @@ export function validateTrendConceptCandidate({
   if (facts.fashionRelevance < thresholds.fashionRelevance) reasons.push(`fashionRelevance ${facts.fashionRelevance.toFixed(2)} below ${thresholds.fashionRelevance}`);
   if (facts.materialRealism < thresholds.materialRealism) reasons.push(`materialRealism ${facts.materialRealism.toFixed(2)} below ${thresholds.materialRealism}`);
   if (facts.compositionQuality < thresholds.compositionQuality) reasons.push(`compositionQuality ${facts.compositionQuality.toFixed(2)} below ${thresholds.compositionQuality}`);
+  if (facts.semanticConfidence < thresholds.semanticConfidence) reasons.push(`semantic confidence ${facts.semanticConfidence.toFixed(2)} below ${thresholds.semanticConfidence}`);
   if (facts.sharpness < thresholds.sharpness) reasons.push(`sharpness ${facts.sharpness.toFixed(2)} below ${thresholds.sharpness}`);
   if (facts.width < thresholds.minWidth || facts.height < thresholds.minHeight) reasons.push(`resolution ${facts.width}x${facts.height} below minimum`);
+  if (Math.abs(facts.aspectRatio - thresholds.aspectRatio) > thresholds.aspectRatioTolerance) reasons.push(`aspect ratio ${facts.aspectRatio.toFixed(3)} is not 4:5`);
+  if (facts.overexposed) reasons.push("image is overexposed");
+  if (facts.underexposed) reasons.push("image is underexposed");
+  if (!facts.ocrAvailable) reasons.push("OCR provider unavailable");
   if (facts.textDetected) reasons.push("text or gibberish detected");
   if (facts.logoDetected) reasons.push("logo or watermark detected");
   if (facts.personDetected) reasons.push("person/anatomy detected where concept cards forbid people");
+  if (!facts.requiredCuesPresent) reasons.push("semantic validator did not confirm required visual cues");
   if (facts.forbiddenCueDetected) reasons.push("forbidden visual cue detected");
   if (facts.missingRequiredCues.length) reasons.push(`missing required cues: ${facts.missingRequiredCues.join(", ")}`);
 
@@ -141,7 +168,8 @@ export function validateTrendConceptCandidate({
     facts.fashionRelevance * 0.18 +
     facts.materialRealism * 0.2 +
     facts.compositionQuality * 0.16 +
-    facts.sharpness * 0.08 +
+    facts.semanticConfidence * 0.08 +
+    facts.sharpness * 0.04 +
     Math.max(0, 1 - facts.missingRequiredCues.length / Math.max(1, brief.requiredVisualCues.length)) * 0.1;
 
   return {
@@ -149,6 +177,65 @@ export function validateTrendConceptCandidate({
     score: Number(score.toFixed(4)),
     rejectionReasons: Array.from(new Set(reasons)),
     facts,
+  };
+}
+
+export function candidateFactsFromAnalysis({
+  brief,
+  pixel,
+  semantic,
+  candidateIndex,
+}: {
+  brief: TrendImageBrief;
+  pixel: ImagePixelAnalysis;
+  semantic: ImageSemanticValidation;
+  candidateIndex: number;
+}): TrendConceptCandidateFacts {
+  const detectedCues = Array.from(new Set([
+    brief.canonicalKeyword,
+    brief.materialFamily,
+    brief.compositionMode,
+    ...brief.requiredVisualCues,
+    semantic.subjectDescription,
+    semantic.materialDescription,
+  ].filter(Boolean)));
+  const semanticText = `${semantic.subjectDescription} ${semantic.materialDescription}`.toLowerCase();
+  const missingRequiredCues = semantic.requiredCuesPresent
+    ? []
+    : brief.requiredVisualCues.filter((cue) => !semanticText.includes(normalized(cue)));
+
+  return {
+    candidateIndex,
+    keywordMatch: semantic.keywordMatch,
+    fashionRelevance: semantic.fashionRelevance,
+    materialRealism: Math.min(semantic.materialRealism, pixel.contrast < 0.05 ? 0.55 : semantic.materialRealism),
+    compositionQuality: semantic.compositionQuality,
+    semanticConfidence: semantic.available ? semantic.confidence : 0,
+    sharpness: pixel.sharpness,
+    width: pixel.width,
+    height: pixel.height,
+    aspectRatio: pixel.aspectRatio,
+    overexposed: pixel.overexposed,
+    underexposed: pixel.underexposed,
+    ocrAvailable: pixel.ocr.available,
+    textDetected: pixel.ocr.textDetected || semantic.textDetected,
+    logoDetected: semantic.logoDetected,
+    personDetected: false,
+    requiredCuesPresent: semantic.requiredCuesPresent,
+    forbiddenCueDetected: semantic.forbiddenCuesPresent || Boolean(semantic.error),
+    detectedCues,
+    missingRequiredCues,
+    dominantPalette: pixel.dominantPalette,
+    dominantColor: pixel.dominantColor,
+    dominantColors: pixel.dominantColors,
+    compositionMode: brief.compositionMode,
+    perceptualHash: pixel.perceptualHash,
+    pixelIntegrityHash: pixel.integrityHash,
+    subjectDescription: semantic.subjectDescription,
+    materialDescription: semantic.materialDescription,
+    semanticProvider: semantic.provider,
+    ocrProvider: pixel.ocr.provider,
+    ocrText: pixel.ocr.text,
   };
 }
 
@@ -190,12 +277,18 @@ export function deterministicCandidateFacts({
     fashionRelevance: 0.82,
     materialRealism: hasEnoughBytes ? 0.8 : 0.55,
     compositionQuality: 0.78,
+    semanticConfidence: 0,
     sharpness: hasEnoughBytes ? 0.58 : 0.18,
     width: 1024,
     height: 1280,
+    aspectRatio: 0.8,
+    overexposed: false,
+    underexposed: false,
+    ocrAvailable: false,
     textDetected: false,
     logoDetected: false,
     personDetected: false,
+    requiredCuesPresent: false,
     forbiddenCueDetected: false,
     detectedCues,
     missingRequiredCues,

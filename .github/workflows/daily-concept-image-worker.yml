@@ -1,0 +1,73 @@
+name: Daily Concept Image Worker
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      max_jobs:
+        description: "Maximum image jobs to process sequentially"
+        required: true
+        default: "3"
+        type: string
+
+concurrency:
+  group: daily-concept-image-worker-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  process-concept-images:
+    name: Process approved concept image queue
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    if: ${{ vars.ENABLE_CLOUD_IMAGE_WORKER == 'true' }}
+
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      IMAGE_GENERATION_PROVIDER: cloudflare
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_IMAGE_MODEL: ${{ vars.CLOUDFLARE_IMAGE_MODEL || '@cf/black-forest-labs/flux-2-klein-9b' }}
+      IMAGE_SEMANTIC_VALIDATOR_PROVIDER: ${{ vars.IMAGE_SEMANTIC_VALIDATOR_PROVIDER }}
+      IMAGE_SEMANTIC_VALIDATOR_URL: ${{ secrets.IMAGE_SEMANTIC_VALIDATOR_URL }}
+      IMAGE_SEMANTIC_VALIDATOR_KEY: ${{ secrets.IMAGE_SEMANTIC_VALIDATOR_KEY }}
+      IMAGE_OCR_PROVIDER: ${{ vars.IMAGE_OCR_PROVIDER }}
+      IMAGE_OCR_URL: ${{ secrets.IMAGE_OCR_URL }}
+      IMAGE_OCR_KEY: ${{ secrets.IMAGE_OCR_KEY }}
+      AUTO_ENQUEUE_TREND_IMAGES_ENABLED: "false"
+      IMAGE_WORKER_MAX_JOBS: ${{ github.event_name == 'workflow_dispatch' && inputs.max_jobs || vars.IMAGE_WORKER_DAILY_LIMIT || '3' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Validate cloud worker configuration
+        shell: bash
+        run: |
+          missing=0
+          for name in NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN IMAGE_SEMANTIC_VALIDATOR_PROVIDER IMAGE_SEMANTIC_VALIDATOR_URL IMAGE_OCR_PROVIDER IMAGE_OCR_URL; do
+            if [ -z "${!name}" ]; then
+              echo "::error title=Missing image worker configuration::$name is required when ENABLE_CLOUD_IMAGE_WORKER=true"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run worker sequentially
+        run: npm run images:worker -- --max-jobs "$IMAGE_WORKER_MAX_JOBS"
