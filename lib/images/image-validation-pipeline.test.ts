@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createImageGenerator, RetryableImageGenerationError } from "@/lib/images/image-generator";
 import { analyzeImagePixels, classifyOcrWords, createOcrProvider, type OcrProvider } from "@/lib/images/image-pixel-analysis";
-import { createImageSemanticValidator, unavailableSemanticValidation } from "@/lib/images/image-semantic-validator";
+import { createImageSemanticValidator, detectImageMimeTypeFromBytes, unavailableSemanticValidation } from "@/lib/images/image-semantic-validator";
 import { buildImageWorkerClaimRpc, parseImageWorkerVariant } from "@/lib/images/image-worker-claim";
 import { buildTrendImageBrief } from "@/lib/images/trend-image-brief";
 import {
@@ -19,6 +19,10 @@ const noTextOcr: OcrProvider = {
     return { available: true, textDetected: false, text: "", confidence: 0.99, boxes: [], provider: "stub" };
   },
 };
+
+const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+const webpBytes = Buffer.from("RIFFxxxxWEBPVP8 ", "ascii");
 
 function validSemanticPayload(overrides: Record<string, unknown> = {}) {
   return {
@@ -38,6 +42,13 @@ function validSemanticPayload(overrides: Record<string, unknown> = {}) {
     provider: "stub",
     ...overrides,
   };
+}
+
+function validProviderSemanticPayload(overrides: Record<string, unknown> = {}) {
+  const payload: Record<string, unknown> = { ...validSemanticPayload(overrides) };
+  delete payload.available;
+  delete payload.provider;
+  return payload;
 }
 
 test("pixel validation decodes real image bytes and derives a pixel perceptual hash", async () => {
@@ -131,7 +142,7 @@ test("Cloudflare semantic validator accepts strict JSON from direct REST respons
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
     requestPayload = JSON.parse(String(init?.body || "{}"));
     return new Response(JSON.stringify({
-    result: { response: JSON.stringify(validSemanticPayload()) },
+    result: { response: JSON.stringify(validProviderSemanticPayload()) },
   }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
 
@@ -142,15 +153,93 @@ test("Cloudflare semantic validator accepts strict JSON from direct REST respons
       CLOUDFLARE_API_TOKEN: "token",
       CLOUDFLARE_VISION_MODEL: "@cf/meta/llama-vision",
     } as unknown as NodeJS.ProcessEnv);
-    const result = await validator.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: Buffer.from("image"), candidateIndex: 0 });
+    const result = await validator.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: jpegBytes, candidateIndex: 0 });
 
     assert.equal(result.available, true);
     assert.equal(result.provider, "cloudflare");
     assert.equal(result.requiredCuesPresent, true);
     assert.equal(typeof requestPayload.image, "string");
-    assert.equal(requestPayload.image.startsWith("data:image/png;base64,"), true);
+    assert.equal(requestPayload.image.startsWith("data:image/jpeg;base64,"), true);
     assert.equal(Array.isArray(requestPayload.messages[1].content), false);
     assert.ok(requestPayload.guided_json);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Cloudflare semantic validator accepts result.response as an already-parsed object", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    success: true,
+    result: {
+      response: validProviderSemanticPayload(),
+    },
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+  try {
+    const validator = createImageSemanticValidator({
+      IMAGE_SEMANTIC_VALIDATOR_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      CLOUDFLARE_VISION_MODEL: "@cf/meta/llama-vision",
+    } as unknown as NodeJS.ProcessEnv);
+    const result = await validator.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: jpegBytes, candidateIndex: 0 });
+
+    assert.equal(result.available, true);
+    assert.equal(result.keywordMatch, 0.92);
+    assert.equal(result.materialRealism, 0.86);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Cloudflare semantic validator accepts result as the semantic object", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    result: validProviderSemanticPayload(),
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+  try {
+    const validator = createImageSemanticValidator({
+      IMAGE_SEMANTIC_VALIDATOR_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      CLOUDFLARE_VISION_MODEL: "@cf/meta/llama-vision",
+    } as unknown as NodeJS.ProcessEnv);
+    const result = await validator.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: pngBytes, candidateIndex: 0 });
+
+    assert.equal(result.available, true);
+    assert.equal(result.provider, "cloudflare");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Cloudflare semantic validator reports sanitized schema issues", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    success: true,
+    result: {
+      response: {
+        keywordMatch: 0.9,
+      },
+    },
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+  try {
+    const validator = createImageSemanticValidator({
+      IMAGE_SEMANTIC_VALIDATOR_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      CLOUDFLARE_VISION_MODEL: "@cf/meta/llama-vision",
+    } as unknown as NodeJS.ProcessEnv);
+    const result = await validator.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: webpBytes, candidateIndex: 0 });
+
+    assert.equal(result.available, false);
+    assert.match(result.error || "", /responseShape=object/);
+    assert.match(result.error || "", /fashionRelevance/);
+    assert.equal((result.error || "").includes("base64"), false);
+    assert.equal((result.error || "").includes("token"), false);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -169,7 +258,7 @@ test("Cloudflare semantic validator rejects invalid JSON safely", async () => {
       CLOUDFLARE_API_TOKEN: "token",
       CLOUDFLARE_VISION_MODEL: "@cf/meta/llama-vision",
     } as unknown as NodeJS.ProcessEnv);
-    const result = await validator.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: Buffer.from("image"), candidateIndex: 0 });
+    const result = await validator.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: jpegBytes, candidateIndex: 0 });
 
     assert.equal(result.available, false);
     assert.ok(result.rejectionReasons.some((reason) => reason.includes("non-JSON")));
@@ -194,12 +283,19 @@ test("Cloudflare semantic validator treats quota as retryable", async () => {
     } as unknown as NodeJS.ProcessEnv);
 
     await assert.rejects(
-      () => validator.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: Buffer.from("image"), candidateIndex: 0 }),
+      () => validator.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: jpegBytes, candidateIndex: 0 }),
       (error) => error instanceof RetryableImageGenerationError && error.retryAfterSeconds === 90,
     );
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("image MIME detection identifies JPEG, PNG and WebP bytes", () => {
+  assert.equal(detectImageMimeTypeFromBytes(jpegBytes), "image/jpeg");
+  assert.equal(detectImageMimeTypeFromBytes(pngBytes), "image/png");
+  assert.equal(detectImageMimeTypeFromBytes(webpBytes), "image/webp");
+  assert.throws(() => detectImageMimeTypeFromBytes(Buffer.from("not an image")), /unsupported image MIME/);
 });
 
 test("Gemini semantic fallback runs only when explicitly configured", async () => {
@@ -212,7 +308,7 @@ test("Gemini semantic fallback runs only when explicitly configured", async () =
       return new Response("offline", { status: 503 });
     }
     return new Response(JSON.stringify({
-      candidates: [{ content: { parts: [{ text: JSON.stringify(validSemanticPayload({ provider: "gemini" })) }] } }],
+      candidates: [{ content: { parts: [{ text: JSON.stringify(validProviderSemanticPayload()) }] } }],
     }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
 

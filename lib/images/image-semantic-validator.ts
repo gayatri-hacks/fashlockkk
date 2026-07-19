@@ -29,21 +29,31 @@ export interface ImageSemanticValidator {
   }): Promise<ImageSemanticValidation>;
 }
 
+const ScoreSchema = z.preprocess((value) => {
+  if (typeof value === "string" && value.trim()) return Number(value);
+  return value;
+}, z.number().min(0).max(1));
+
+const BooleanSchema = z.union([
+  z.boolean(),
+  z.enum(["true", "false", "TRUE", "FALSE"]).transform((value) => value.toLowerCase() === "true"),
+]);
+
 const SemanticPayloadSchema = z.object({
-  keywordMatch: z.coerce.number().min(0).max(1),
-  fashionRelevance: z.coerce.number().min(0).max(1),
-  materialRealism: z.coerce.number().min(0).max(1),
-  compositionQuality: z.coerce.number().min(0).max(1),
-  requiredCuesPresent: z.coerce.boolean(),
-  forbiddenCuesPresent: z.coerce.boolean(),
-  textDetected: z.coerce.boolean(),
-  logoDetected: z.coerce.boolean(),
-  subjectDescription: z.coerce.string(),
-  materialDescription: z.coerce.string(),
-  rejectionReasons: z.array(z.coerce.string()).default([]),
-  confidence: z.coerce.number().min(0).max(1),
+  keywordMatch: ScoreSchema,
+  fashionRelevance: ScoreSchema,
+  materialRealism: ScoreSchema,
+  compositionQuality: ScoreSchema,
+  requiredCuesPresent: BooleanSchema,
+  forbiddenCuesPresent: BooleanSchema,
+  textDetected: BooleanSchema,
+  logoDetected: BooleanSchema,
+  subjectDescription: z.string(),
+  materialDescription: z.string(),
+  rejectionReasons: z.array(z.coerce.string()),
+  confidence: ScoreSchema,
   provider: z.coerce.string().optional(),
-});
+}).strict();
 
 function stringArray(value: unknown) {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
@@ -131,38 +141,117 @@ const SEMANTIC_GUIDED_JSON_SCHEMA = {
   ],
 };
 
-function cloudflareVisionImagePayload(imageBuffer: Buffer) {
-  return `data:image/png;base64,${imageBuffer.toString("base64")}`;
-}
-
-function extractResponseText(payload: any): string {
-  if (typeof payload === "string") return payload;
-  if (typeof payload?.result?.response === "string") return payload.result.response;
-  if (typeof payload?.result?.text === "string") return payload.result.text;
-  if (typeof payload?.response === "string") return payload.response;
-  if (typeof payload?.text === "string") return payload.text;
-  if (typeof payload?.result === "string") return payload.result;
-  if (typeof payload?.choices?.[0]?.message?.content === "string") return payload.choices[0].message.content;
-  if (typeof payload?.candidates?.[0]?.content?.parts?.[0]?.text === "string") {
-    return payload.candidates[0].content.parts[0].text;
+export function detectImageMimeTypeFromBytes(imageBuffer: Buffer) {
+  if (imageBuffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return "image/jpeg";
+  if (imageBuffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return "image/png";
   }
-  return JSON.stringify(payload?.result || payload);
+  if (
+    imageBuffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    imageBuffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  throw new Error("unsupported image MIME type for semantic vision validation");
 }
 
-function parseStrictSemanticJson(payload: unknown, provider: string): ImageSemanticValidation {
-  const text = extractResponseText(payload).trim();
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-  const jsonText = fenced || text.match(/\{[\s\S]*\}/)?.[0] || text;
-  let parsed: unknown;
+function cloudflareVisionImagePayload(imageBuffer: Buffer) {
+  const mimeType = detectImageMimeTypeFromBytes(imageBuffer);
+  return `data:${mimeType};base64,${imageBuffer.toString("base64")}`;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function semanticKeyCount(value: unknown) {
+  if (!isPlainObject(value)) return 0;
+  return [
+    "keywordMatch",
+    "fashionRelevance",
+    "materialRealism",
+    "compositionQuality",
+    "requiredCuesPresent",
+    "forbiddenCuesPresent",
+    "textDetected",
+    "logoDetected",
+    "subjectDescription",
+    "materialDescription",
+    "rejectionReasons",
+    "confidence",
+  ].filter((key) => key in value).length;
+}
+
+function safeShape(value: unknown, depth = 0): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return `array(${value.length})`;
+  if (typeof value !== "object") return typeof value;
+  if (depth >= 2) return "object";
+  const entries = Object.keys(value as Record<string, unknown>)
+    .slice(0, 12)
+    .map((key) => `${key}:${safeShape((value as Record<string, unknown>)[key], depth + 1)}`);
+  return `object{${entries.join(",")}}`;
+}
+
+function parseSemanticJsonText(text: string, provider: string) {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+  const jsonText = fenced || trimmed.match(/\{[\s\S]*\}/)?.[0] || trimmed;
   try {
-    parsed = JSON.parse(jsonText);
+    return JSON.parse(jsonText);
   } catch {
     throw new Error(`${provider} semantic validator returned non-JSON output`);
   }
+}
+
+function contentCandidate(value: unknown) {
+  if (Array.isArray(value)) {
+    const textPart = value.find((part) => isPlainObject(part) && typeof part.text === "string");
+    return textPart && isPlainObject(textPart) ? textPart.text : undefined;
+  }
+  return value;
+}
+
+function normalizeSemanticPayload(payload: unknown, provider: string) {
+  const candidates = [
+    isPlainObject(payload) && isPlainObject(payload.result) ? payload.result.response : undefined,
+    isPlainObject(payload) ? payload.response : undefined,
+    isPlainObject(payload) ? contentCandidate((payload.choices as any)?.[0]?.message?.content) : undefined,
+    isPlainObject(payload) ? (payload.candidates as any)?.[0]?.content?.parts?.[0]?.text : undefined,
+    isPlainObject(payload) && isPlainObject(payload.result) && semanticKeyCount(payload.result) >= 4 ? payload.result : undefined,
+    isPlainObject(payload) && semanticKeyCount(payload) >= 4 ? payload : undefined,
+    isPlainObject(payload) ? payload.result : undefined,
+    isPlainObject(payload) ? payload.text : undefined,
+    payload,
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate === undefined) continue;
+    const parsed = typeof candidate === "string" ? parseSemanticJsonText(candidate, provider) : candidate;
+    if (semanticKeyCount(parsed) >= 4) {
+      return { parsed, shape: safeShape(payload) };
+    }
+  }
+
+  if (typeof payload === "string") return { parsed: parseSemanticJsonText(payload, provider), shape: "string" };
+  return { parsed: payload, shape: safeShape(payload) };
+}
+
+function zodIssueSummary(error: z.ZodError) {
+  return error.issues
+    .slice(0, 12)
+    .map((issue) => `${issue.path.join(".") || "(root)"}:${issue.code}`)
+    .join(", ");
+}
+
+function parseStrictSemanticJson(payload: unknown, provider: string): ImageSemanticValidation {
+  const { parsed, shape } = normalizeSemanticPayload(payload, provider);
 
   const result = SemanticPayloadSchema.safeParse(parsed);
   if (!result.success) {
-    throw new Error(`${provider} semantic validator returned invalid JSON schema`);
+    throw new Error(
+      `${provider} semantic validator returned invalid JSON schema; responseShape=${shape}; issues=${zodIssueSummary(result.error)}`,
+    );
   }
 
   return {

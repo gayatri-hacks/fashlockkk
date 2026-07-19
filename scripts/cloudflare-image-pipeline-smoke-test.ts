@@ -21,9 +21,7 @@ function requiredEnv(name: string) {
 }
 
 function redact(value: string | undefined) {
-  if (!value) return "";
-  if (value.length <= 8) return "[redacted]";
-  return `${value.slice(0, 4)}...[redacted]...${value.slice(-4)}`;
+  return value ? "[redacted]" : "";
 }
 
 function classifyFailure(error: unknown) {
