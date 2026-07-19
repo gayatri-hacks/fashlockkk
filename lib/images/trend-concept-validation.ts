@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import type { ImageDefectValidation } from "@/lib/images/image-defect-validator";
 import type { ImagePixelAnalysis } from "@/lib/images/image-pixel-analysis";
 import type { ImageSemanticValidation } from "@/lib/images/image-semantic-validator";
 import type { TrendImageBrief } from "@/lib/images/trend-image-brief";
@@ -37,6 +38,17 @@ export type TrendConceptCandidateFacts = {
   semanticProvider?: string;
   ocrProvider?: string;
   ocrText?: string;
+  suspiciousTagLikeTextDetected?: boolean;
+  defectReviewAvailable?: boolean;
+  defectReviewPassed?: boolean;
+  visibleLabelDetected?: boolean;
+  imitationWritingDetected?: boolean;
+  defectLogoOrWatermarkDetected?: boolean;
+  materialContradictsBrief?: boolean;
+  repeatedCatalogComposition?: boolean;
+  defectRejectionReasons?: string[];
+  defectDetectedMaterial?: string;
+  defectCompositionDescription?: string;
 };
 
 export type AcceptedTrendConceptContext = {
@@ -149,10 +161,18 @@ export function validateTrendConceptCandidate({
   if (facts.underexposed) reasons.push("image is underexposed");
   if (!facts.ocrAvailable) reasons.push("OCR provider unavailable");
   if (facts.textDetected) reasons.push("text or gibberish detected");
+  if (facts.suspiciousTagLikeTextDetected) reasons.push("suspicious tag-like OCR glyphs detected");
   if (facts.logoDetected) reasons.push("logo or watermark detected");
   if (facts.personDetected) reasons.push("person/anatomy detected where concept cards forbid people");
   if (!facts.requiredCuesPresent) reasons.push("semantic validator did not confirm required visual cues");
   if (facts.forbiddenCueDetected) reasons.push("forbidden visual cue detected");
+  if (facts.defectReviewPassed === false) reasons.push("independent defect review failed");
+  if (facts.visibleLabelDetected) reasons.push("defect review detected visible label or tag");
+  if (facts.imitationWritingDetected) reasons.push("defect review detected imitation writing");
+  if (facts.defectLogoOrWatermarkDetected) reasons.push("defect review detected logo or watermark");
+  if (facts.materialContradictsBrief) reasons.push("defect review detected material mismatch");
+  if (facts.repeatedCatalogComposition) reasons.push("defect review detected repeated centered product-catalog composition");
+  if (facts.defectRejectionReasons?.length) reasons.push(`defect review: ${facts.defectRejectionReasons.join(", ")}`);
   if (facts.missingRequiredCues.length) reasons.push(`missing required cues: ${facts.missingRequiredCues.join(", ")}`);
 
   for (const forbiddenCue of brief.forbiddenVisualCues) {
@@ -184,11 +204,13 @@ export function candidateFactsFromAnalysis({
   brief,
   pixel,
   semantic,
+  defect,
   candidateIndex,
 }: {
   brief: TrendImageBrief;
   pixel: ImagePixelAnalysis;
   semantic: ImageSemanticValidation;
+  defect?: ImageDefectValidation;
   candidateIndex: number;
 }): TrendConceptCandidateFacts {
   const detectedCues = Array.from(new Set([
@@ -236,6 +258,17 @@ export function candidateFactsFromAnalysis({
     semanticProvider: semantic.provider,
     ocrProvider: pixel.ocr.provider,
     ocrText: pixel.ocr.text,
+    suspiciousTagLikeTextDetected: Boolean(pixel.ocr.suspiciousTagLikeTextDetected),
+    defectReviewAvailable: defect?.available,
+    defectReviewPassed: defect?.available ? defect.passed : undefined,
+    visibleLabelDetected: defect?.visibleLabelDetected,
+    imitationWritingDetected: defect?.imitationWritingDetected,
+    defectLogoOrWatermarkDetected: defect?.logoOrWatermarkDetected,
+    materialContradictsBrief: defect?.materialContradictsBrief,
+    repeatedCatalogComposition: defect?.repeatedCatalogComposition,
+    defectRejectionReasons: defect?.rejectionReasons,
+    defectDetectedMaterial: defect?.detectedMaterial,
+    defectCompositionDescription: defect?.compositionDescription,
   };
 }
 

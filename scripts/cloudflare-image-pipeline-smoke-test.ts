@@ -5,6 +5,7 @@ import { mkdir, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { buildFashionImagePrompt } from "../lib/images/build-fashion-image-prompt";
 import { createImageGenerator, RetryableImageGenerationError } from "../lib/images/image-generator";
+import { createImageDefectValidator } from "../lib/images/image-defect-validator";
 import { analyzeImagePixels, createOcrProvider, disposeOcrProvider } from "../lib/images/image-pixel-analysis";
 import { createImageSemanticValidator } from "../lib/images/image-semantic-validator";
 import { buildTrendImageBrief } from "../lib/images/trend-image-brief";
@@ -64,6 +65,7 @@ async function main() {
     IMAGE_GENERATION_PROVIDER: "cloudflare",
     IMAGE_SEMANTIC_VALIDATOR_PROVIDER: "cloudflare",
     IMAGE_SEMANTIC_VALIDATOR_FALLBACK_PROVIDER: "disabled",
+    IMAGE_DEFECT_VALIDATOR_PROVIDER: "cloudflare",
     IMAGE_OCR_PROVIDER: process.env.IMAGE_OCR_PROVIDER || "local_tesseract",
     CLOUDFLARE_ACCOUNT_ID: accountId,
     CLOUDFLARE_API_TOKEN: apiToken,
@@ -84,6 +86,7 @@ async function main() {
   const generator = createImageGenerator(smokeEnv);
   const ocrProvider = createOcrProvider(smokeEnv);
   const semanticValidator = createImageSemanticValidator(smokeEnv);
+  const defectValidator = createImageDefectValidator(smokeEnv);
 
   const report: Record<string, unknown> = {
     test: "cloudflare-image-pipeline-smoke-test",
@@ -120,12 +123,17 @@ async function main() {
       throw new Error(`Cloudflare semantic validation failed strict JSON schema: ${semantic.error || semantic.rejectionReasons.join("; ")}`);
     }
 
-    const facts = candidateFactsFromAnalysis({ brief, pixel, semantic, candidateIndex: 0 });
+    const defect = await defectValidator.validate({ brief, imageBuffer: generated.buffer, pixel, candidateIndex: 0 });
+    if (!defect.available) {
+      throw new Error(`Cloudflare defect validation failed strict JSON schema: ${defect.error || defect.rejectionReasons.join("; ")}`);
+    }
+
+    const facts = candidateFactsFromAnalysis({ brief, pixel, semantic, defect, candidateIndex: 0 });
     const validation = validateTrendConceptCandidate({ brief, facts });
 
     Object.assign(report, {
       completedAt: new Date().toISOString(),
-      status: "passed",
+      status: validation.passed ? "passed" : "failed",
       image: {
         path: imagePath,
         provider: generated.provider,
@@ -150,6 +158,8 @@ async function main() {
         textDetected: pixel.ocr.textDetected,
         confidence: pixel.ocr.confidence,
         boxCount: pixel.ocr.boxes.length,
+        suspiciousTagLikeTextDetected: Boolean(pixel.ocr.suspiciousTagLikeTextDetected),
+        suspiciousGlyphClusterCount: pixel.ocr.suspiciousGlyphClusters?.length || 0,
       },
       semantic: {
         provider: semantic.provider,
@@ -166,6 +176,22 @@ async function main() {
         confidence: semantic.confidence,
         rejectionReasons: semantic.rejectionReasons,
       },
+      defect: {
+        provider: defect.provider,
+        passed: defect.passed,
+        visibleLabelDetected: defect.visibleLabelDetected,
+        imitationWritingDetected: defect.imitationWritingDetected,
+        logoOrWatermarkDetected: defect.logoOrWatermarkDetected,
+        materialContradictsBrief: defect.materialContradictsBrief,
+        repeatedCatalogComposition: defect.repeatedCatalogComposition,
+        detectedMaterial: defect.detectedMaterial,
+        subjectDescription: defect.subjectDescription,
+        materialDescription: defect.materialDescription,
+        compositionDescription: defect.compositionDescription,
+        tagRegionDescription: defect.tagRegionDescription,
+        confidence: defect.confidence,
+        rejectionReasons: defect.rejectionReasons,
+      },
       publicationValidation: {
         passed: validation.passed,
         score: validation.score,
@@ -174,12 +200,16 @@ async function main() {
     });
 
     await writeFile(join(outputDir, "cloudflare-smoke-report.json"), `${JSON.stringify(report, null, 2)}\n`);
+    if (!validation.passed) {
+      throw new Error(`Cloudflare Image Pipeline Smoke Test failed publication validation: ${validation.rejectionReasons.join("; ")}`);
+    }
     console.log("Cloudflare Image Pipeline Smoke Test passed");
     console.log(`Generated image bytes: ${metadata.size}`);
     console.log(`Decoded image: ${metadata.width}x${metadata.height} ${metadata.format}`);
     console.log(`Sharp pixel analysis: hash=${pixel.perceptualHash.slice(0, 16)} palette=${pixel.dominantPalette}`);
     console.log(`Local Tesseract OCR: available=${pixel.ocr.available} textDetected=${pixel.ocr.textDetected}`);
     console.log(`Cloudflare semantic validation: keywordMatch=${semantic.keywordMatch.toFixed(2)} materialRealism=${semantic.materialRealism.toFixed(2)}`);
+    console.log(`Cloudflare defect validation: passed=${defect.passed} material=${defect.detectedMaterial || "unknown"}`);
     console.log(`Publication validation computed: passed=${validation.passed} score=${validation.score}`);
     console.log(`Redacted artifact report: ${join(outputDir, "cloudflare-smoke-report.json")}`);
   } catch (error) {

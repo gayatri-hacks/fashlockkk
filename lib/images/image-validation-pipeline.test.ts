@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createImageGenerator, RetryableImageGenerationError } from "@/lib/images/image-generator";
+import { createImageDefectValidator } from "@/lib/images/image-defect-validator";
 import { analyzeImagePixels, classifyOcrWords, createOcrProvider, disposeOcrProvider, type OcrProvider } from "@/lib/images/image-pixel-analysis";
 import { createImageSemanticValidator, detectImageMimeTypeFromBytes, unavailableSemanticValidation } from "@/lib/images/image-semantic-validator";
 import { buildImageWorkerClaimRpc, parseImageWorkerVariant } from "@/lib/images/image-worker-claim";
@@ -49,6 +50,24 @@ function validProviderSemanticPayload(overrides: Record<string, unknown> = {}) {
   delete payload.available;
   delete payload.provider;
   return payload;
+}
+
+function validProviderDefectPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    visibleLabelDetected: false,
+    imitationWritingDetected: false,
+    logoOrWatermarkDetected: false,
+    materialContradictsBrief: false,
+    repeatedCatalogComposition: false,
+    detectedMaterial: "genuine leather",
+    subjectDescription: "a fashion material detail",
+    materialDescription: "realistic material grain and stitching",
+    compositionDescription: "editorial asymmetric product image",
+    tagRegionDescription: "no collar label, tag or writing visible",
+    rejectionReasons: [],
+    confidence: 0.87,
+    ...overrides,
+  };
 }
 
 test("pixel validation decodes real image bytes and derives a pixel perceptual hash", async () => {
@@ -122,6 +141,16 @@ test("local OCR classification catches high-confidence small label text", () => 
   ], { provider: "local_tesseract", confidenceThreshold: 0.72, minWordLength: 2 });
 
   assert.equal(result.textDetected, true);
+});
+
+test("local OCR classification rejects suspicious low-confidence tag glyphs in neckline region", () => {
+  const result = classifyOcrWords([
+    { text: "rn", confidence: 0.45, bbox: { x0: 0.44, y0: 0.12, x1: 0.5, y1: 0.16 } },
+  ], { provider: "local_tesseract", confidenceThreshold: 0.72, minWordLength: 2 });
+
+  assert.equal(result.textDetected, true);
+  assert.equal(result.suspiciousTagLikeTextDetected, true);
+  assert.equal(result.suspiciousGlyphClusters?.length, 1);
 });
 
 test("OCR provider cleanup disposes after successful work", async () => {
@@ -338,6 +367,127 @@ test("Cloudflare semantic validator treats quota as retryable", async () => {
       () => validator.validate({ brief: buildTrendImageBrief("denim"), imageBuffer: jpegBytes, candidateIndex: 0 }),
       (error) => error instanceof RetryableImageGenerationError && error.retryAfterSeconds === 90,
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Cloudflare defect validator accepts strict JSON and sends crop-sheet image payload", async () => {
+  const sharp = (await import("sharp")).default;
+  const imageBuffer = await sharp({
+    create: {
+      width: 1024,
+      height: 1280,
+      channels: 3,
+      background: "#3b2a25",
+    },
+  }).jpeg().toBuffer();
+  const pixel = await analyzeImagePixels(imageBuffer, { ocrProvider: noTextOcr });
+  const originalFetch = globalThis.fetch;
+  let requestPayload: any = null;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    requestPayload = JSON.parse(String(init?.body || "{}"));
+    return new Response(JSON.stringify({
+      result: { response: validProviderDefectPayload() },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    const validator = createImageDefectValidator({
+      IMAGE_DEFECT_VALIDATOR_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      CLOUDFLARE_VISION_MODEL: "@cf/meta/llama-vision",
+    } as unknown as NodeJS.ProcessEnv);
+    const result = await validator.validate({ brief: buildTrendImageBrief("leather"), imageBuffer, pixel, candidateIndex: 0 });
+
+    assert.equal(result.available, true);
+    assert.equal(result.passed, true);
+    assert.equal(requestPayload.image.startsWith("data:image/jpeg;base64,"), true);
+    assert.match(requestPayload.messages[1].content, /crop sheet/);
+    assert.match(requestPayload.messages[1].content, /collar label/);
+    assert.ok(requestPayload.guided_json);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("defect review failures block publication even with strong semantic scores", async () => {
+  const sharp = (await import("sharp")).default;
+  const brief = buildTrendImageBrief("oversized");
+  const imageBuffer = await sharp({
+    create: {
+      width: 1024,
+      height: 1280,
+      channels: 3,
+      background: "#cad3da",
+    },
+  }).jpeg().toBuffer();
+  const pixel = await analyzeImagePixels(imageBuffer, { ocrProvider: noTextOcr });
+  const semantic = validSemanticPayload({
+    keywordMatch: 0.99,
+    fashionRelevance: 0.99,
+    materialRealism: 0.99,
+    compositionQuality: 0.99,
+    confidence: 0.99,
+    materialDescription: "poplin",
+  }) as any;
+  const defect = {
+    available: true,
+    passed: false,
+    visibleLabelDetected: true,
+    imitationWritingDetected: false,
+    logoOrWatermarkDetected: false,
+    materialContradictsBrief: true,
+    repeatedCatalogComposition: true,
+    detectedMaterial: "denim/chambray",
+    subjectDescription: "centered oversized shirt",
+    materialDescription: "denim-like twill",
+    compositionDescription: "centered product catalog garment on grey",
+    tagRegionDescription: "small collar label visible",
+    rejectionReasons: ["visible collar label", "material contradicts poplin", "repeated catalog composition"],
+    confidence: 0.82,
+    provider: "stub",
+  };
+  const facts = candidateFactsFromAnalysis({ brief, pixel, semantic, defect, candidateIndex: 0 });
+  const result = validateTrendConceptCandidate({ brief, facts });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.rejectionReasons.some((reason) => reason.includes("defect review detected visible label")));
+  assert.ok(result.rejectionReasons.some((reason) => reason.includes("material mismatch")));
+  assert.ok(result.rejectionReasons.some((reason) => reason.includes("centered product-catalog")));
+});
+
+test("Cloudflare defect validator reports sanitized schema issues", async () => {
+  const sharp = (await import("sharp")).default;
+  const imageBuffer = await sharp({
+    create: {
+      width: 1024,
+      height: 1280,
+      channels: 3,
+      background: "#3b2a25",
+    },
+  }).jpeg().toBuffer();
+  const pixel = await analyzeImagePixels(imageBuffer, { ocrProvider: noTextOcr });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    result: { response: { visibleLabelDetected: false } },
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+  try {
+    const validator = createImageDefectValidator({
+      IMAGE_DEFECT_VALIDATOR_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      CLOUDFLARE_VISION_MODEL: "@cf/meta/llama-vision",
+    } as unknown as NodeJS.ProcessEnv);
+    const result = await validator.validate({ brief: buildTrendImageBrief("leather"), imageBuffer, pixel, candidateIndex: 0 });
+
+    assert.equal(result.available, false);
+    assert.match(result.error || "", /responseShape=object/);
+    assert.match(result.error || "", /materialContradictsBrief/);
+    assert.equal((result.error || "").includes("base64"), false);
+    assert.equal((result.error || "").includes("token"), false);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -589,6 +739,26 @@ test("Cloudflare smoke test script does not import Supabase or production queue 
   assert.equal(source.includes("claim_next_image_generation_job"), false);
   assert.equal(source.includes("finally"), true);
   assert.equal(source.includes("disposeOcrProvider(ocrProvider)"), true);
+  assert.equal(source.includes("createImageDefectValidator"), true);
+});
+
+test("Cloudflare quality calibration is manual-only, zero-Supabase and capped at five images", () => {
+  const source = readFileSync("scripts/cloudflare-image-quality-calibration.ts", "utf8");
+  const workflow = readFileSync(".github/workflows/cloudflare-image-quality-calibration.yml", "utf8");
+
+  assert.equal(source.includes("@supabase/supabase-js"), false);
+  assert.equal(source.includes("image_generation_jobs"), false);
+  assert.equal(source.includes("claim_next_image_generation_job"), false);
+  assert.equal(source.includes("MAX_TEMPORARY_IMAGES = 5"), true);
+  assert.equal(source.includes("candidateCount: 1"), true);
+  assert.match(source, /oversized/);
+  assert.match(source, /floral/);
+  assert.match(source, /leather/);
+  assert.match(source, /layering/);
+  assert.match(source, /kurta/);
+  assert.match(workflow, /workflow_dispatch/);
+  assert.equal(workflow.includes("schedule:"), false);
+  assert.equal(workflow.includes("ENABLE_CLOUD_IMAGE_WORKER"), false);
 });
 
 test("production image worker disposes OCR provider from a finally block", () => {

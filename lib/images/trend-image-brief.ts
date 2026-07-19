@@ -192,6 +192,17 @@ const PRESETS: Record<string, BriefPreset> = {
     requiredVisualCues: ["linen weave", "natural slub", "garment construction"],
     forbiddenVisualCues: ["plastic sheen", "flat polyester", "blanket-like fabric"],
   },
+  leather: {
+    visualSubject: "genuine leather garment construction detail with grain, seams and edge highlights",
+    category: "fabric_or_craft",
+    materialFamily: "genuine leather",
+    materialDescription: MATERIAL_REGISTRY.leather,
+    compositionMode: "architectural product still-life",
+    paletteFamily: "black, oxblood, espresso or dark brown with controlled highlights",
+    constructionDetails: ["leather grain", "edge highlight", "stitched seam", "material thickness"],
+    requiredVisualCues: ["leather grain", "fashion garment detail", "realistic material weight"],
+    forbiddenVisualCues: ["denim", "chambray", "cotton shirt", "plastic vinyl", "fake pebbled texture"],
+  },
   trench: {
     visualSubject: "trench coat construction details in cotton gabardine",
     category: "classic_outerwear",

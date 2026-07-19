@@ -21,6 +21,8 @@ export type OcrResult = {
   text: string;
   confidence: number;
   boxes: OcrBox[];
+  suspiciousTagLikeTextDetected?: boolean;
+  suspiciousGlyphClusters?: OcrBox[];
   provider: string;
   error?: string;
 };
@@ -93,6 +95,30 @@ function isTextLikeToken(value: string, minWordLength: number) {
   return /[A-Za-z]/.test(normalized) || /\d{3,}/.test(normalized);
 }
 
+function isTagLikeRegion(box: OcrBox) {
+  const bbox = box.bbox;
+  if (!bbox) return false;
+  const centerX = (bbox.x0 + bbox.x1) / 2;
+  const centerY = (bbox.y0 + bbox.y1) / 2;
+  return centerX >= 0.28 && centerX <= 0.72 && centerY >= 0.02 && centerY <= 0.38;
+}
+
+function suspiciousTagLikeClusters(words: OcrBox[], confidenceThreshold: number, minWordLength: number) {
+  return words
+    .map((word) => ({
+      ...word,
+      text: compactOcrText(word.text),
+      confidence: normalizeConfidence(word.confidence),
+    }))
+    .filter((word) => {
+      if (!word.text || !isTagLikeRegion(word)) return false;
+      const normalized = word.text.replace(/[^A-Za-z0-9]/g, "");
+      const looksLikeGlyphs = normalized.length >= Math.max(1, minWordLength - 1) && /[A-Za-z0-9]/.test(normalized);
+      return looksLikeGlyphs && word.confidence >= 0.28 && word.confidence < confidenceThreshold;
+    })
+    .slice(0, 8);
+}
+
 export function classifyOcrWords(
   words: OcrBox[],
   options: {
@@ -119,13 +145,16 @@ export function classifyOcrWords(
     ? confidentWords.reduce((sum, word) => sum + word.confidence, 0) / confidentWords.length
     : 0;
   const rawText = compactOcrText(options.rawText || words.map((word) => word.text).join(" "));
+  const suspiciousGlyphClusters = suspiciousTagLikeClusters(words, confidenceThreshold, minWordLength);
 
   return {
     available: true,
-    textDetected: textLikeWords.length >= 1 || confidentWords.length >= minTextFragments,
+    textDetected: textLikeWords.length >= 1 || confidentWords.length >= minTextFragments || suspiciousGlyphClusters.length > 0,
     text: rawText,
     confidence: averageConfidence,
     boxes: confidentWords,
+    suspiciousTagLikeTextDetected: suspiciousGlyphClusters.length > 0,
+    suspiciousGlyphClusters,
     provider: options.provider,
   };
 }
@@ -189,21 +218,32 @@ class LocalTesseractOcrProvider implements OcrProvider {
   private async recognizeWords(worker: any, imageBuffer: Buffer) {
     const result = await worker.recognize(imageBuffer);
     const data = result?.data || {};
+    const metadata = await this.imageMetadata(imageBuffer);
     const words: OcrBox[] = Array.isArray(data.words)
       ? data.words.map((word: any) => ({
           text: String(word.text || ""),
           confidence: normalizeConfidence(word.confidence),
           bbox: word.bbox
             ? {
-                x0: Number(word.bbox.x0 || 0),
-                y0: Number(word.bbox.y0 || 0),
-                x1: Number(word.bbox.x1 || 0),
-                y1: Number(word.bbox.y1 || 0),
+                x0: Number(word.bbox.x0 || 0) / Math.max(1, metadata.width),
+                y0: Number(word.bbox.y0 || 0) / Math.max(1, metadata.height),
+                x1: Number(word.bbox.x1 || 0) / Math.max(1, metadata.width),
+                y1: Number(word.bbox.y1 || 0) / Math.max(1, metadata.height),
               }
             : undefined,
         }))
       : [];
     return { words, rawText: String(data.text || "") };
+  }
+
+  private async imageMetadata(imageBuffer: Buffer) {
+    try {
+      const sharp = (await import("sharp")).default;
+      const metadata = await sharp(imageBuffer).metadata();
+      return { width: metadata.width || 1, height: metadata.height || 1 };
+    } catch {
+      return { width: 1, height: 1 };
+    }
   }
 
   private async enhancedLabelPass(imageBuffer: Buffer) {
