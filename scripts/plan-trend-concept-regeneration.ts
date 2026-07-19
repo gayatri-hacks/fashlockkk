@@ -11,6 +11,7 @@ import {
   validateEditorialNameSafety,
   type TrendEvidenceBundle,
 } from "../lib/trends/editorial-refinement";
+import { trendConceptKeywordsMatch } from "../lib/images/trend-concept-regeneration-plan";
 
 type GlobalTrendScoreRow = {
   canonical_keyword: string;
@@ -130,7 +131,7 @@ async function main() {
     } else {
       const facts = selectedFacts(image);
       const storedKeyword = imageKeyword(image);
-      if (storedKeyword && storedKeyword !== String(row.canonical_keyword).toLowerCase()) {
+      if (storedKeyword && !trendConceptKeywordsMatch(storedKeyword, String(row.canonical_keyword))) {
         reasons.push(`image keyword mismatch: image=${storedKeyword} trend=${row.canonical_keyword}`);
       }
       if (facts.textDetected) reasons.push("OCR/text detected in selected image");

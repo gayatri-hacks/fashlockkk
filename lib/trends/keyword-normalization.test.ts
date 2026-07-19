@@ -6,6 +6,9 @@ test("normalises casing, spacing, punctuation and safe aliases", () => {
   assert.equal(canonicalizeTrendKeyword("  Wide-Leg   Denim "), "wide leg denim");
   assert.equal(canonicalizeTrendKeyword("co ord"), "co-ord");
   assert.equal(canonicalizeTrendKeyword("COORD"), "co-ord");
+  assert.equal(canonicalizeTrendKeyword("co-ord set"), "co-ord");
+  assert.equal(canonicalizeTrendKeyword("coord set"), "co-ord");
+  assert.equal(canonicalizeTrendKeyword("co ord set"), "co-ord");
 });
 
 test("does not merge distinct loose, oversized and relaxed fit concepts", () => {

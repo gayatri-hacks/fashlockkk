@@ -1,10 +1,15 @@
 const EXPLICIT_ALIAS_MAP = new Map<string, string>([
   ["co ord", "co-ord"],
+  ["co ord set", "co-ord"],
   ["co-ords", "co-ord"],
+  ["co-ords set", "co-ord"],
   ["coord", "co-ord"],
+  ["coord set", "co-ord"],
   ["coords", "co-ord"],
+  ["coords set", "co-ord"],
   ["co ordinate", "co-ord"],
   ["co ordinates", "co-ord"],
+  ["co-ord set", "co-ord"],
   ["wide-leg", "wide leg"],
   ["wideleg", "wide leg"],
   ["wide legged", "wide leg"],
@@ -132,9 +137,9 @@ export function canonicalizeTrendKeyword(value: string) {
   const hyphenNormalized = normalized
     .replace(/\bwide\s*-\s*leg(?:ged)?\b/g, "wide leg")
     .replace(/\bwideleg\b/g, "wide leg")
-    .replace(/\bco\s*-\s*ord(s)?\b/g, "co-ord")
-    .replace(/\bco\s+ord(s)?\b/g, "co-ord")
-    .replace(/\bcoord(s)?\b/g, "co-ord");
+    .replace(/\bco\s*-\s*ord(s)?(?:\s+set)?\b/g, "co-ord")
+    .replace(/\bco\s+ord(s)?(?:\s+set)?\b/g, "co-ord")
+    .replace(/\bcoord(s)?(?:\s+set)?\b/g, "co-ord");
   return EXPLICIT_ALIAS_MAP.get(hyphenNormalized) || hyphenNormalized;
 }
 
