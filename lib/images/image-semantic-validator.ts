@@ -104,6 +104,7 @@ function semanticPrompt(brief: TrendImageBrief, candidateIndex: number) {
     "",
     "Score whether the image genuinely shows the canonical fashion concept, realistic fashion material, and the requested editorial product composition.",
     "Reject fake typography, watermarks, logos, poster layouts, non-fashion subjects, unrelated garments, wrong materials and poor material realism.",
+    "Any visible collar label, sewn-in clothing label, brand tab, fake tag, care tag, garment tag, imitation writing or tiny readable/letter-like mark must be treated as forbidden. Set forbiddenCuesPresent=true, and set textDetected=true or logoDetected=true as appropriate.",
     "JSON schema: {\"keywordMatch\":0-1,\"fashionRelevance\":0-1,\"materialRealism\":0-1,\"compositionQuality\":0-1,\"requiredCuesPresent\":boolean,\"forbiddenCuesPresent\":boolean,\"textDetected\":boolean,\"logoDetected\":boolean,\"subjectDescription\":\"string\",\"materialDescription\":\"string\",\"rejectionReasons\":[\"string\"],\"confidence\":0-1}",
   ].join("\n");
 }

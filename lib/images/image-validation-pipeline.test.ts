@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createImageGenerator, RetryableImageGenerationError } from "@/lib/images/image-generator";
-import { analyzeImagePixels, classifyOcrWords, createOcrProvider, type OcrProvider } from "@/lib/images/image-pixel-analysis";
+import { analyzeImagePixels, classifyOcrWords, createOcrProvider, disposeOcrProvider, type OcrProvider } from "@/lib/images/image-pixel-analysis";
 import { createImageSemanticValidator, detectImageMimeTypeFromBytes, unavailableSemanticValidation } from "@/lib/images/image-semantic-validator";
 import { buildImageWorkerClaimRpc, parseImageWorkerVariant } from "@/lib/images/image-worker-claim";
 import { buildTrendImageBrief } from "@/lib/images/trend-image-brief";
@@ -114,6 +114,58 @@ test("local OCR classification avoids false positives on low-confidence pattern 
   ], { provider: "local_tesseract", confidenceThreshold: 0.72, minWordLength: 3 });
 
   assert.equal(result.textDetected, false);
+});
+
+test("local OCR classification catches high-confidence small label text", () => {
+  const result = classifyOcrWords([
+    { text: "AI", confidence: 0.93 },
+  ], { provider: "local_tesseract", confidenceThreshold: 0.72, minWordLength: 2 });
+
+  assert.equal(result.textDetected, true);
+});
+
+test("OCR provider cleanup disposes after successful work", async () => {
+  let disposed = false;
+  const provider: OcrProvider = {
+    provider: "stub",
+    async detectText() {
+      return { available: true, textDetected: false, text: "", confidence: 1, boxes: [], provider: "stub" };
+    },
+    async dispose() {
+      disposed = true;
+    },
+  };
+
+  try {
+    await provider.detectText(Buffer.from("ok"));
+  } finally {
+    await disposeOcrProvider(provider);
+  }
+
+  assert.equal(disposed, true);
+});
+
+test("OCR provider cleanup disposes after failed work", async () => {
+  let disposed = false;
+  const provider: OcrProvider = {
+    provider: "stub",
+    async detectText() {
+      throw new Error("ocr failed");
+    },
+    async dispose() {
+      disposed = true;
+    },
+  };
+
+  await assert.rejects(async () => {
+    try {
+      await provider.detectText(Buffer.from("fail"));
+    } finally {
+      await disposeOcrProvider(provider);
+    }
+  }, /ocr failed/);
+
+  assert.equal(disposed, true);
 });
 
 test("unavailable OCR cannot approve a concept image", async () => {
@@ -535,6 +587,16 @@ test("Cloudflare smoke test script does not import Supabase or production queue 
   assert.equal(source.includes("@supabase/supabase-js"), false);
   assert.equal(source.includes("image_generation_jobs"), false);
   assert.equal(source.includes("claim_next_image_generation_job"), false);
+  assert.equal(source.includes("finally"), true);
+  assert.equal(source.includes("disposeOcrProvider(ocrProvider)"), true);
+});
+
+test("production image worker disposes OCR provider from a finally block", () => {
+  const source = readFileSync("scripts/ollama-image-worker.ts", "utf8");
+
+  assert.equal(source.includes("finally"), true);
+  assert.equal(source.includes("disposeOcrProvider(ocrProvider)"), true);
+  assert.equal(source.includes("process.exit(1)"), false);
 });
 
 test("migration 025 remains additive and avoids destructive replacement", () => {

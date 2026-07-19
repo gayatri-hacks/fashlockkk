@@ -5,7 +5,7 @@ import { mkdir, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { buildFashionImagePrompt } from "../lib/images/build-fashion-image-prompt";
 import { createImageGenerator, RetryableImageGenerationError } from "../lib/images/image-generator";
-import { analyzeImagePixels, createOcrProvider } from "../lib/images/image-pixel-analysis";
+import { analyzeImagePixels, createOcrProvider, disposeOcrProvider } from "../lib/images/image-pixel-analysis";
 import { createImageSemanticValidator } from "../lib/images/image-semantic-validator";
 import { buildTrendImageBrief } from "../lib/images/trend-image-brief";
 import { candidateFactsFromAnalysis, validateTrendConceptCandidate } from "../lib/images/trend-concept-validation";
@@ -159,6 +159,10 @@ async function main() {
         compositionQuality: semantic.compositionQuality,
         requiredCuesPresent: semantic.requiredCuesPresent,
         forbiddenCuesPresent: semantic.forbiddenCuesPresent,
+        textDetected: semantic.textDetected,
+        logoDetected: semantic.logoDetected,
+        subjectDescription: semantic.subjectDescription,
+        materialDescription: semantic.materialDescription,
         confidence: semantic.confidence,
         rejectionReasons: semantic.rejectionReasons,
       },
@@ -186,10 +190,12 @@ async function main() {
     });
     await writeFile(join(outputDir, "cloudflare-smoke-report.json"), `${JSON.stringify(report, null, 2)}\n`);
     throw new Error(classifyFailure(error));
+  } finally {
+    await disposeOcrProvider(ocrProvider);
   }
 }
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
+  process.exitCode = 1;
 });

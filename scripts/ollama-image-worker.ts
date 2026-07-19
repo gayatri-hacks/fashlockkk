@@ -3,7 +3,7 @@ import "./load-env";
 import { createClient } from "@supabase/supabase-js";
 import { storagePathForFashionImage, type FashionImageVariant } from "../lib/images/build-fashion-image-prompt";
 import { createImageGenerator, RetryableImageGenerationError } from "../lib/images/image-generator";
-import { analyzeImagePixels, createOcrProvider } from "../lib/images/image-pixel-analysis";
+import { analyzeImagePixels, createOcrProvider, disposeOcrProvider } from "../lib/images/image-pixel-analysis";
 import { createImageSemanticValidator } from "../lib/images/image-semantic-validator";
 import { buildImageWorkerClaimRpc, parseImageWorkerVariant } from "../lib/images/image-worker-claim";
 import { buildTrendImageBrief } from "../lib/images/trend-image-brief";
@@ -49,12 +49,15 @@ const workerVariant = parseImageWorkerVariant(process.env.IMAGE_WORKER_VARIANT);
 
 let stopping = false;
 
-process.on("SIGINT", () => {
+function requestStop(signal: "SIGINT" | "SIGTERM") {
+  if (!stopping) {
+    console.log(`Image worker received ${signal}; stopping after current operation.`);
+  }
   stopping = true;
-});
-process.on("SIGTERM", () => {
-  stopping = true;
-});
+}
+
+process.on("SIGINT", () => requestStop("SIGINT"));
+process.on("SIGTERM", () => requestStop("SIGTERM"));
 
 function requiredEnv(name: string) {
   const value = process.env[name];
@@ -548,45 +551,48 @@ async function main() {
   console.log(`Image worker ${workerId} using ${imageGenerator.describe()}${workerVariant ? ` variant=${workerVariant}` : ""}`);
   let processedJobs = 0;
 
-  while (!stopping) {
-    if (maxJobs > 0 && processedJobs >= maxJobs) {
-      console.log(`Image worker processed configured max jobs: ${maxJobs}`);
-      break;
-    }
+  try {
+    while (!stopping) {
+      if (maxJobs > 0 && processedJobs >= maxJobs) {
+        console.log(`Image worker processed configured max jobs: ${maxJobs}`);
+        break;
+      }
 
-    if (!(await imageGenerator.isReachable())) {
-      console.warn(`Image generator is not reachable at ${imageGenerator.describe()}; waiting.`);
-      await sleep(pollMs);
-      continue;
-    }
+      if (!(await imageGenerator.isReachable())) {
+        console.warn(`Image generator is not reachable at ${imageGenerator.describe()}; waiting.`);
+        await sleep(pollMs);
+        continue;
+      }
 
-    const job = await claimJob();
-    if (!job) {
-      await sleep(pollMs);
-      continue;
-    }
+      const job = await claimJob();
+      if (!job) {
+        await sleep(pollMs);
+        continue;
+      }
 
-    console.log(`Processing job ${job.id} trend=${job.entity_id} variant=${job.variant} attempt=${job.attempts}/${job.max_attempts}`);
+      console.log(`Processing job ${job.id} trend=${job.entity_id} variant=${job.variant} attempt=${job.attempts}/${job.max_attempts}`);
 
-    try {
-      await processJob(job);
-      processedJobs += 1;
-      console.log(`Completed job ${job.id}`);
-    } catch (error) {
-      console.error(`Job ${job.id} failed: ${error instanceof Error ? error.message : String(error)}`);
-      if (error instanceof RetryableImageGenerationError) {
-        await markRetryableReview(job, error);
-        stopping = true;
-      } else {
-        await markFailed(job, error);
+      try {
+        await processJob(job);
+        processedJobs += 1;
+        console.log(`Completed job ${job.id}`);
+      } catch (error) {
+        console.error(`Job ${job.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+        if (error instanceof RetryableImageGenerationError) {
+          await markRetryableReview(job, error);
+          stopping = true;
+        } else {
+          await markFailed(job, error);
+        }
       }
     }
+  } finally {
+    await disposeOcrProvider(ocrProvider);
+    console.log("Image worker stopped.");
   }
-
-  console.log("Image worker stopped.");
 }
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
+  process.exitCode = 1;
 });

@@ -28,6 +28,7 @@ export type OcrResult = {
 export interface OcrProvider {
   provider: string;
   detectText(imageBuffer: Buffer): Promise<OcrResult>;
+  dispose?(): Promise<void> | void;
 }
 
 export type ImagePixelAnalysis = {
@@ -145,16 +146,20 @@ class LocalTesseractOcrProvider implements OcrProvider {
   private readonly minTextFragments: number;
   private readonly langPath: string;
   private readonly cachePath: string | undefined;
+  private disposed = false;
 
   constructor(env: NodeJS.ProcessEnv) {
     this.confidenceThreshold = ocrThreshold(env.IMAGE_OCR_MIN_CONFIDENCE, 0.72);
-    this.minWordLength = Math.max(1, Number(env.IMAGE_OCR_MIN_WORD_LENGTH || 3));
+    this.minWordLength = Math.max(1, Number(env.IMAGE_OCR_MIN_WORD_LENGTH || 2));
     this.minTextFragments = Math.max(1, Number(env.IMAGE_OCR_MIN_FRAGMENTS || 2));
     this.langPath = env.TESSERACT_LANG_PATH || bundledTesseractLangPath();
     this.cachePath = env.TESSERACT_CACHE_PATH;
   }
 
   private async worker() {
+    if (this.disposed) {
+      throw new ImagePixelAnalysisError("local Tesseract OCR provider has been disposed");
+    }
     if (!this.workerPromise) {
       this.workerPromise = (async () => {
         if (!this.langPath) {
@@ -181,8 +186,7 @@ class LocalTesseractOcrProvider implements OcrProvider {
     return this.workerPromise;
   }
 
-  async detectText(imageBuffer: Buffer): Promise<OcrResult> {
-    const worker = await this.worker();
+  private async recognizeWords(worker: any, imageBuffer: Buffer) {
     const result = await worker.recognize(imageBuffer);
     const data = result?.data || {};
     const words: OcrBox[] = Array.isArray(data.words)
@@ -199,14 +203,52 @@ class LocalTesseractOcrProvider implements OcrProvider {
             : undefined,
         }))
       : [];
+    return { words, rawText: String(data.text || "") };
+  }
+
+  private async enhancedLabelPass(imageBuffer: Buffer) {
+    try {
+      const sharp = (await import("sharp")).default;
+      return sharp(imageBuffer)
+        .rotate()
+        .resize({ width: 2200, withoutEnlargement: false })
+        .greyscale()
+        .normalise()
+        .linear(1.35, -18)
+        .sharpen({ sigma: 0.8, m1: 1.2, m2: 0.45 })
+        .png()
+        .toBuffer();
+    } catch {
+      return null;
+    }
+  }
+
+  async detectText(imageBuffer: Buffer): Promise<OcrResult> {
+    const worker = await this.worker();
+    const primary = await this.recognizeWords(worker, imageBuffer);
+    const enhancedBuffer = await this.enhancedLabelPass(imageBuffer);
+    const enhanced = enhancedBuffer ? await this.recognizeWords(worker, enhancedBuffer) : { words: [], rawText: "" };
+    const words = [...primary.words, ...enhanced.words];
+    const rawText = [primary.rawText, enhanced.rawText].filter(Boolean).join(" ");
 
     return classifyOcrWords(words, {
       provider: this.provider,
       confidenceThreshold: this.confidenceThreshold,
       minWordLength: this.minWordLength,
       minTextFragments: this.minTextFragments,
-      rawText: String(data.text || ""),
+      rawText,
     });
+  }
+
+  async dispose() {
+    this.disposed = true;
+    const workerPromise = this.workerPromise;
+    this.workerPromise = null;
+    if (!workerPromise) return;
+    const worker = await workerPromise.catch(() => null);
+    if (worker?.terminate) {
+      await worker.terminate();
+    }
   }
 }
 
@@ -255,6 +297,10 @@ export function createOcrProvider(env: NodeJS.ProcessEnv = process.env): OcrProv
     return new HttpOcrProvider(url, env.IMAGE_OCR_KEY);
   }
   return new UnavailableOcrProvider();
+}
+
+export async function disposeOcrProvider(ocrProvider: OcrProvider) {
+  await ocrProvider.dispose?.();
 }
 
 function luma(r: number, g: number, b: number) {
