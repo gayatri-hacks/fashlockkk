@@ -11,8 +11,9 @@ import { createImageSemanticValidator } from "../lib/images/image-semantic-valid
 import { buildTrendImageBrief } from "../lib/images/trend-image-brief";
 import { candidateFactsFromAnalysis, validateTrendConceptCandidate } from "../lib/images/trend-concept-validation";
 
-const CALIBRATION_KEYWORDS = ["oversized", "floral", "leather", "layering", "kurta"] as const;
-const MAX_TEMPORARY_IMAGES = 5;
+const DEFAULT_CALIBRATION_KEYWORDS = ["oversized", "floral", "leather", "layering", "kurta"] as const;
+const SAFE_CALIBRATION_KEYWORDS = new Set(DEFAULT_CALIBRATION_KEYWORDS);
+const DEFAULT_MAX_TEMPORARY_IMAGES = 5;
 const IMAGE_SIZE = "1024x1280";
 const OUTPUT_DIR = ".tmp/cloudflare-image-quality-calibration";
 
@@ -31,6 +32,19 @@ function classifyFailure(error: unknown) {
     return `Cloudflare quota/rate-limit failure: ${error.message}${error.retryAfterSeconds ? `; retry after ${error.retryAfterSeconds}s` : ""}`;
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+function calibrationKeywords() {
+  const raw = process.env.CALIBRATION_KEYWORDS || DEFAULT_CALIBRATION_KEYWORDS.join(",");
+  const keywords = raw.split(",").map((keyword) => keyword.trim().toLowerCase()).filter(Boolean);
+  const invalid = keywords.filter((keyword) => !SAFE_CALIBRATION_KEYWORDS.has(keyword as any));
+  if (invalid.length) throw new Error(`Unsupported calibration keyword(s): ${invalid.join(", ")}`);
+  return Array.from(new Set(keywords));
+}
+
+function maxTemporaryImages() {
+  const parsed = Number(process.env.CALIBRATION_MAX_TEMPORARY_IMAGES || DEFAULT_MAX_TEMPORARY_IMAGES);
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(DEFAULT_MAX_TEMPORARY_IMAGES, parsed)) : DEFAULT_MAX_TEMPORARY_IMAGES;
 }
 
 async function decodedImageMetadata(imageBuffer: Buffer) {
@@ -137,8 +151,10 @@ function contactSheetHtml(reports: any[]) {
 }
 
 async function main() {
-  if (CALIBRATION_KEYWORDS.length > MAX_TEMPORARY_IMAGES) {
-    throw new Error(`Calibration would generate ${CALIBRATION_KEYWORDS.length} images, exceeding max ${MAX_TEMPORARY_IMAGES}`);
+  const keywords = calibrationKeywords();
+  const maxImages = maxTemporaryImages();
+  if (keywords.length > maxImages) {
+    throw new Error(`Calibration would generate ${keywords.length} images, exceeding max ${maxImages}`);
   }
 
   const accountId = requiredEnv("CLOUDFLARE_ACCOUNT_ID");
@@ -170,7 +186,7 @@ async function main() {
   const reports: any[] = [];
 
   try {
-    for (const [index, keyword] of CALIBRATION_KEYWORDS.entries()) {
+    for (const [index, keyword] of keywords.entries()) {
       const brief = buildTrendImageBrief(keyword);
       const prompt = promptForKeyword(keyword, imageModel);
       const report: Record<string, unknown> = {
@@ -289,9 +305,10 @@ async function main() {
     await writeFile(join(outputDir, "calibration-report.json"), `${JSON.stringify({
       test: "cloudflare-image-quality-calibration",
       imageCount: reports.length,
-      maxTemporaryImages: MAX_TEMPORARY_IMAGES,
+      maxTemporaryImages: maxImages,
+      configuredMaxTemporaryImages: maxImages,
       candidateCountPerKeyword: 1,
-      keywords: CALIBRATION_KEYWORDS,
+      keywords,
       generatedAt: new Date().toISOString(),
       reports,
     }, null, 2)}\n`);

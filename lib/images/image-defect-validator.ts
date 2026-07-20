@@ -19,8 +19,17 @@ export type ImageDefectValidation = {
   tagRegionDescription: string;
   rejectionReasons: string[];
   confidence: number;
+  labelForensicsPassed: boolean;
+  labelForensicsUncertain: boolean;
+  labelForensicsReasons: string[];
   provider: string;
   error?: string;
+};
+
+export type LabelForensicsResult = {
+  passed: boolean;
+  uncertain: boolean;
+  reasons: string[];
 };
 
 export interface ImageDefectValidator {
@@ -108,6 +117,9 @@ function unavailableDefectValidation(provider: string, error: string): ImageDefe
     tagRegionDescription: "",
     rejectionReasons: [error],
     confidence: 0,
+    labelForensicsPassed: false,
+    labelForensicsUncertain: true,
+    labelForensicsReasons: [error],
     provider,
     error,
   };
@@ -205,7 +217,17 @@ function zodIssueSummary(error: z.ZodError) {
     .join(", ");
 }
 
-function parseStrictDefectJson(payload: unknown, provider: string): ImageDefectValidation {
+function requiredEvidenceDescriptions(data: z.infer<typeof DefectPayloadSchema>) {
+  return [
+    ["subjectDescription", data.subjectDescription],
+    ["materialDescription", data.materialDescription],
+    ["compositionDescription", data.compositionDescription],
+    ["tagRegionDescription", data.tagRegionDescription],
+    ["detectedMaterial", data.detectedMaterial],
+  ] as const;
+}
+
+function parseStrictDefectJson(payload: unknown, provider: string, labelForensics?: LabelForensicsResult): ImageDefectValidation {
   const { parsed, shape } = normalizeDefectPayload(payload, provider);
   const result = DefectPayloadSchema.safeParse(parsed);
   if (!result.success) {
@@ -213,12 +235,35 @@ function parseStrictDefectJson(payload: unknown, provider: string): ImageDefectV
   }
 
   const rejectionReasons = Array.from(new Set(result.data.rejectionReasons.map(String).filter(Boolean)));
+  if (result.data.confidence < 0.75) {
+    rejectionReasons.push(`defect confidence ${result.data.confidence.toFixed(2)} below 0.75`);
+  }
+  for (const [field, value] of requiredEvidenceDescriptions(result.data)) {
+    if (!value.trim()) rejectionReasons.push(`defect evidence ${field} is empty`);
+  }
+  if (
+    !result.data.visibleLabelDetected &&
+    !result.data.imitationWritingDetected &&
+    !result.data.logoOrWatermarkDetected &&
+    !result.data.materialContradictsBrief &&
+    !result.data.repeatedCatalogComposition &&
+    result.data.confidence === 0 &&
+    requiredEvidenceDescriptions(result.data).every(([, value]) => !value.trim())
+  ) {
+    rejectionReasons.push("defect review returned a pass with no supporting evidence");
+  }
+  if (labelForensics?.uncertain) rejectionReasons.push("label forensics uncertain");
+  if (labelForensics && !labelForensics.passed) rejectionReasons.push(...labelForensics.reasons);
+
   const passed =
     !result.data.visibleLabelDetected &&
     !result.data.imitationWritingDetected &&
     !result.data.logoOrWatermarkDetected &&
     !result.data.materialContradictsBrief &&
     !result.data.repeatedCatalogComposition &&
+    result.data.confidence >= 0.75 &&
+    requiredEvidenceDescriptions(result.data).every(([, value]) => Boolean(value.trim())) &&
+    (labelForensics ? labelForensics.passed : true) &&
     rejectionReasons.length === 0;
 
   return {
@@ -236,6 +281,9 @@ function parseStrictDefectJson(payload: unknown, provider: string): ImageDefectV
     tagRegionDescription: result.data.tagRegionDescription,
     rejectionReasons,
     confidence: result.data.confidence,
+    labelForensicsPassed: labelForensics?.passed ?? true,
+    labelForensicsUncertain: labelForensics?.uncertain ?? false,
+    labelForensicsReasons: labelForensics?.reasons ?? [],
     provider,
   };
 }
@@ -303,6 +351,73 @@ export async function buildDefectReviewSheet(imageBuffer: Buffer) {
     .toBuffer();
 }
 
+export async function runLabelForensics(imageBuffer: Buffer, pixel: ImagePixelAnalysis): Promise<LabelForensicsResult> {
+  const reasons: string[] = [];
+  if (pixel.ocr.suspiciousTagLikeTextDetected) {
+    reasons.push("suspicious low-confidence OCR glyphs inside tag-like neckline region");
+  }
+  if (pixel.ocr.boxes.some((box) => {
+    const bbox = box.bbox;
+    if (!bbox) return false;
+    const centerX = (bbox.x0 + bbox.x1) / 2;
+    const centerY = (bbox.y0 + bbox.y1) / 2;
+    return centerX >= 0.28 && centerX <= 0.72 && centerY >= 0.02 && centerY <= 0.38 && /[A-Za-z0-9]/.test(box.text);
+  })) {
+    reasons.push("OCR detected text-like marks in likely neckline or sewn-tag region");
+  }
+
+  try {
+    const sharp = (await import("sharp")).default;
+    const metadata = await sharp(imageBuffer).metadata();
+    const width = metadata.width || 1024;
+    const height = metadata.height || 1280;
+    const left = Math.round(width * 0.28);
+    const top = Math.round(height * 0.03);
+    const cropWidth = Math.round(width * 0.44);
+    const cropHeight = Math.round(height * 0.32);
+    const { data, info } = await sharp(imageBuffer)
+      .extract({ left, top, width: Math.min(width - left, cropWidth), height: Math.min(height - top, cropHeight) })
+      .resize(220, 160, { fit: "fill" })
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const pixels: number[] = [];
+    let redGlyphPixels = 0;
+    for (let index = 0; index < data.length; index += info.channels) {
+      const red = data[index];
+      const green = data[index + 1];
+      const blue = data[index + 2];
+      pixels.push(0.2126 * red + 0.7152 * green + 0.0722 * blue);
+      if (red > 120 && red > green * 1.18 && red > blue * 1.18) redGlyphPixels += 1;
+    }
+    const brightRatio = pixels.filter((value) => value > 232).length / Math.max(1, pixels.length);
+    const darkRatio = pixels.filter((value) => value < 80).length / Math.max(1, pixels.length);
+    const redGlyphRatio = redGlyphPixels / Math.max(1, pixels.length);
+    const mean = pixels.reduce((sum, value) => sum + value, 0) / Math.max(1, pixels.length);
+    const variance = pixels.reduce((sum, value) => sum + (value - mean) ** 2, 0) / Math.max(1, pixels.length);
+    const contrast = Math.sqrt(variance) / 255;
+    if (
+      (brightRatio >= 0.015 && brightRatio <= 0.34 && darkRatio >= 0.002 && contrast >= 0.08) ||
+      (brightRatio >= 0.005 && redGlyphRatio >= 0.00005 && contrast >= 0.04) ||
+      (brightRatio >= 0.01 && darkRatio >= 0.01 && contrast >= 0.12)
+    ) {
+      reasons.push("possible white sewn-in tag with dark/red glyph detail in neckline crop");
+    }
+  } catch (error) {
+    return {
+      passed: false,
+      uncertain: true,
+      reasons: [`label forensics crop analysis failed: ${error instanceof Error ? error.message : String(error)}`],
+    };
+  }
+
+  return {
+    passed: reasons.length === 0,
+    uncertain: reasons.length > 0,
+    reasons,
+  };
+}
+
 function defectPrompt(brief: TrendImageBrief, pixel: ImagePixelAnalysis, candidateIndex: number) {
   return [
     "You are an independent Fashlock image defect reviewer. Return strict JSON only. Do not include markdown, prose, comments or extra keys.",
@@ -319,6 +434,8 @@ function defectPrompt(brief: TrendImageBrief, pixel: ImagePixelAnalysis, candida
     "",
     "Fail closed. Look especially at collar, neckline, placket, pocket, hem, tag and seam regions.",
     "If any collar label, sewn-in label, care tag, brand tab, fake garment tag, imitation writing, tiny letter-like mark, logo or watermark is visible, set the matching defect boolean true even if the text is unreadable.",
+    "Treat uncertainty as rejection. If the crop is blurry, ambiguous or could plausibly contain a label/tag/writing, set visibleLabelDetected=true or imitationWritingDetected=true and include the uncertainty in rejectionReasons.",
+    "A clean garment must show plain fabric at the inner neckline when the neckline is visible. Any white rectangle, red mark, black mark or tag-like patch there is a defect.",
     "Reject if the material visible in the image contradicts the requested material family. Example: denim/chambray-looking cloth contradicts a request for crisp poplin, voile or silk.",
     "Reject repetitive centered product-catalog composition: a garment centered front-on against a plain grey/beige wall with little asymmetry, movement, texture crop, construction focus or editorial styling.",
     "Do not award perfect scores by default. This pass is only looking for defects.",
@@ -338,6 +455,7 @@ class CloudflareDefectValidator implements ImageDefectValidator {
 
   async validate(input: { brief: TrendImageBrief; imageBuffer: Buffer; pixel: ImagePixelAnalysis; candidateIndex: number }): Promise<ImageDefectValidation> {
     const reviewSheet = await buildDefectReviewSheet(input.imageBuffer);
+    const labelForensics = await runLabelForensics(input.imageBuffer, input.pixel);
     const timer = timeoutSignal(this.timeoutMs);
     try {
       const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(this.accountId)}/ai/run/${this.model}`, {
@@ -373,7 +491,7 @@ class CloudflareDefectValidator implements ImageDefectValidator {
       }
 
       try {
-        return parseStrictDefectJson(await response.json(), this.provider);
+        return parseStrictDefectJson(await response.json(), this.provider, labelForensics);
       } catch (error) {
         return unavailableDefectValidation(this.provider, error instanceof Error ? error.message : String(error));
       }

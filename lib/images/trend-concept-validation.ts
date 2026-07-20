@@ -41,6 +41,7 @@ export type TrendConceptCandidateFacts = {
   suspiciousTagLikeTextDetected?: boolean;
   defectReviewAvailable?: boolean;
   defectReviewPassed?: boolean;
+  defectConfidence?: number;
   visibleLabelDetected?: boolean;
   imitationWritingDetected?: boolean;
   defectLogoOrWatermarkDetected?: boolean;
@@ -49,6 +50,9 @@ export type TrendConceptCandidateFacts = {
   defectRejectionReasons?: string[];
   defectDetectedMaterial?: string;
   defectCompositionDescription?: string;
+  labelForensicsPassed?: boolean;
+  labelForensicsUncertain?: boolean;
+  labelForensicsReasons?: string[];
 };
 
 export type AcceptedTrendConceptContext = {
@@ -72,6 +76,7 @@ export const TREND_CONCEPT_ACCEPTANCE_THRESHOLDS = {
   materialRealism: 0.78,
   compositionQuality: 0.75,
   semanticConfidence: 0.75,
+  defectConfidence: 0.75,
   sharpness: 0.25,
   duplicateSimilarity: 0.9,
   minWidth: 768,
@@ -154,6 +159,9 @@ export function validateTrendConceptCandidate({
   if (facts.materialRealism < thresholds.materialRealism) reasons.push(`materialRealism ${facts.materialRealism.toFixed(2)} below ${thresholds.materialRealism}`);
   if (facts.compositionQuality < thresholds.compositionQuality) reasons.push(`compositionQuality ${facts.compositionQuality.toFixed(2)} below ${thresholds.compositionQuality}`);
   if (facts.semanticConfidence < thresholds.semanticConfidence) reasons.push(`semantic confidence ${facts.semanticConfidence.toFixed(2)} below ${thresholds.semanticConfidence}`);
+  if (facts.defectReviewAvailable && (facts.defectConfidence ?? 0) < thresholds.defectConfidence) {
+    reasons.push(`defect confidence ${(facts.defectConfidence ?? 0).toFixed(2)} below ${thresholds.defectConfidence}`);
+  }
   if (facts.sharpness < thresholds.sharpness) reasons.push(`sharpness ${facts.sharpness.toFixed(2)} below ${thresholds.sharpness}`);
   if (facts.width < thresholds.minWidth || facts.height < thresholds.minHeight) reasons.push(`resolution ${facts.width}x${facts.height} below minimum`);
   if (Math.abs(facts.aspectRatio - thresholds.aspectRatio) > thresholds.aspectRatioTolerance) reasons.push(`aspect ratio ${facts.aspectRatio.toFixed(3)} is not 4:5`);
@@ -167,6 +175,9 @@ export function validateTrendConceptCandidate({
   if (!facts.requiredCuesPresent) reasons.push("semantic validator did not confirm required visual cues");
   if (facts.forbiddenCueDetected) reasons.push("forbidden visual cue detected");
   if (facts.defectReviewPassed === false) reasons.push("independent defect review failed");
+  if (facts.labelForensicsPassed === false) reasons.push("binary label forensics failed");
+  if (facts.labelForensicsUncertain) reasons.push("binary label forensics uncertain");
+  if (facts.labelForensicsReasons?.length) reasons.push(`label forensics: ${facts.labelForensicsReasons.join(", ")}`);
   if (facts.visibleLabelDetected) reasons.push("defect review detected visible label or tag");
   if (facts.imitationWritingDetected) reasons.push("defect review detected imitation writing");
   if (facts.defectLogoOrWatermarkDetected) reasons.push("defect review detected logo or watermark");
@@ -261,6 +272,7 @@ export function candidateFactsFromAnalysis({
     suspiciousTagLikeTextDetected: Boolean(pixel.ocr.suspiciousTagLikeTextDetected),
     defectReviewAvailable: defect?.available,
     defectReviewPassed: defect?.available ? defect.passed : undefined,
+    defectConfidence: defect?.confidence,
     visibleLabelDetected: defect?.visibleLabelDetected,
     imitationWritingDetected: defect?.imitationWritingDetected,
     defectLogoOrWatermarkDetected: defect?.logoOrWatermarkDetected,
@@ -269,6 +281,9 @@ export function candidateFactsFromAnalysis({
     defectRejectionReasons: defect?.rejectionReasons,
     defectDetectedMaterial: defect?.detectedMaterial,
     defectCompositionDescription: defect?.compositionDescription,
+    labelForensicsPassed: defect?.labelForensicsPassed,
+    labelForensicsUncertain: defect?.labelForensicsUncertain,
+    labelForensicsReasons: defect?.labelForensicsReasons,
   };
 }
 

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createImageGenerator, RetryableImageGenerationError } from "@/lib/images/image-generator";
-import { createImageDefectValidator } from "@/lib/images/image-defect-validator";
+import { createImageDefectValidator, runLabelForensics } from "@/lib/images/image-defect-validator";
 import { analyzeImagePixels, classifyOcrWords, createOcrProvider, disposeOcrProvider, type OcrProvider } from "@/lib/images/image-pixel-analysis";
 import { createImageSemanticValidator, detectImageMimeTypeFromBytes, unavailableSemanticValidation } from "@/lib/images/image-semantic-validator";
 import { buildImageWorkerClaimRpc, parseImageWorkerVariant } from "@/lib/images/image-worker-claim";
@@ -447,6 +447,9 @@ test("defect review failures block publication even with strong semantic scores"
     tagRegionDescription: "small collar label visible",
     rejectionReasons: ["visible collar label", "material contradicts poplin", "repeated catalog composition"],
     confidence: 0.82,
+    labelForensicsPassed: false,
+    labelForensicsUncertain: true,
+    labelForensicsReasons: ["possible white sewn-in tag with dark/red glyph detail in neckline crop"],
     provider: "stub",
   };
   const facts = candidateFactsFromAnalysis({ brief, pixel, semantic, defect, candidateIndex: 0 });
@@ -456,6 +459,104 @@ test("defect review failures block publication even with strong semantic scores"
   assert.ok(result.rejectionReasons.some((reason) => reason.includes("defect review detected visible label")));
   assert.ok(result.rejectionReasons.some((reason) => reason.includes("material mismatch")));
   assert.ok(result.rejectionReasons.some((reason) => reason.includes("centered product-catalog")));
+});
+
+test("defect review fails closed for zero confidence and empty evidence descriptions", async () => {
+  const sharp = (await import("sharp")).default;
+  const imageBuffer = await sharp({
+    create: {
+      width: 1024,
+      height: 1280,
+      channels: 3,
+      background: "#cad3da",
+    },
+  }).jpeg().toBuffer();
+  const pixel = await analyzeImagePixels(imageBuffer, { ocrProvider: noTextOcr });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    result: {
+      response: validProviderDefectPayload({
+        visibleLabelDetected: false,
+        imitationWritingDetected: false,
+        logoOrWatermarkDetected: false,
+        materialContradictsBrief: false,
+        repeatedCatalogComposition: false,
+        detectedMaterial: "",
+        subjectDescription: "",
+        materialDescription: "",
+        compositionDescription: "",
+        tagRegionDescription: "",
+        rejectionReasons: [],
+        confidence: 0,
+      }),
+    },
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+  try {
+    const validator = createImageDefectValidator({
+      IMAGE_DEFECT_VALIDATOR_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      CLOUDFLARE_VISION_MODEL: "@cf/meta/llama-vision",
+    } as unknown as NodeJS.ProcessEnv);
+    const defect = await validator.validate({ brief: buildTrendImageBrief("oversized"), imageBuffer, pixel, candidateIndex: 0 });
+
+    assert.equal(defect.available, true);
+    assert.equal(defect.passed, false);
+    assert.ok(defect.rejectionReasons.some((reason) => reason.includes("defect confidence 0.00 below 0.75")));
+    assert.ok(defect.rejectionReasons.some((reason) => reason.includes("defect evidence subjectDescription is empty")));
+    assert.ok(defect.rejectionReasons.some((reason) => reason.includes("no supporting evidence")));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("publication validation independently enforces defect confidence threshold", async () => {
+  const sharp = (await import("sharp")).default;
+  const brief = buildTrendImageBrief("floral");
+  const imageBuffer = await sharp({
+    create: {
+      width: 1024,
+      height: 1280,
+      channels: 3,
+      background: "#c88591",
+    },
+  }).jpeg().toBuffer();
+  const pixel = await analyzeImagePixels(imageBuffer, { ocrProvider: noTextOcr });
+  const semantic = validSemanticPayload({ provider: "stub" }) as any;
+  const defect = {
+    ...validProviderDefectPayload({ confidence: 0.6 }),
+    available: true,
+    passed: true,
+    provider: "stub",
+    labelForensicsPassed: true,
+    labelForensicsUncertain: false,
+    labelForensicsReasons: [],
+  };
+  const facts = candidateFactsFromAnalysis({ brief, pixel, semantic, defect, candidateIndex: 0 });
+  const result = validateTrendConceptCandidate({ brief, facts });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.rejectionReasons.some((reason) => reason.includes("defect confidence 0.60 below 0.75")));
+});
+
+test("run 29717363735 compressed tag-region regression crops fail label forensics", async () => {
+  const sharp = (await import("sharp")).default;
+  const fixtures = [
+    "lib/images/__fixtures__/regression-crops/run-29717363735-oversized-collar-label.svg",
+    "lib/images/__fixtures__/regression-crops/run-29717363735-layering-inner-neckline-writing.svg",
+    "lib/images/__fixtures__/regression-crops/run-29717363735-kurta-white-neck-tag-red-writing.svg",
+  ];
+
+  for (const fixture of fixtures) {
+    const imageBuffer = await sharp(readFileSync(fixture)).jpeg().toBuffer();
+    const pixel = await analyzeImagePixels(imageBuffer, { ocrProvider: noTextOcr });
+    const result = await runLabelForensics(imageBuffer, pixel);
+
+    assert.equal(result.passed, false, fixture);
+    assert.equal(result.uncertain, true, fixture);
+    assert.ok(result.reasons.some((reason) => reason.includes("sewn-in tag") || reason.includes("neckline")), fixture);
+  }
 });
 
 test("Cloudflare defect validator reports sanitized schema issues", async () => {
@@ -742,14 +843,15 @@ test("Cloudflare smoke test script does not import Supabase or production queue 
   assert.equal(source.includes("createImageDefectValidator"), true);
 });
 
-test("Cloudflare quality calibration is manual-only, zero-Supabase and capped at five images", () => {
+test("Cloudflare quality calibration is manual-only, zero-Supabase and supports a three-image retest cap", () => {
   const source = readFileSync("scripts/cloudflare-image-quality-calibration.ts", "utf8");
   const workflow = readFileSync(".github/workflows/cloudflare-image-quality-calibration.yml", "utf8");
 
   assert.equal(source.includes("@supabase/supabase-js"), false);
   assert.equal(source.includes("image_generation_jobs"), false);
   assert.equal(source.includes("claim_next_image_generation_job"), false);
-  assert.equal(source.includes("MAX_TEMPORARY_IMAGES = 5"), true);
+  assert.equal(source.includes("DEFAULT_MAX_TEMPORARY_IMAGES = 5"), true);
+  assert.equal(source.includes("CALIBRATION_MAX_TEMPORARY_IMAGES"), true);
   assert.equal(source.includes("candidateCount: 1"), true);
   assert.match(source, /oversized/);
   assert.match(source, /floral/);
@@ -757,6 +859,8 @@ test("Cloudflare quality calibration is manual-only, zero-Supabase and capped at
   assert.match(source, /layering/);
   assert.match(source, /kurta/);
   assert.match(workflow, /workflow_dispatch/);
+  assert.match(workflow, /keywords/);
+  assert.match(workflow, /CALIBRATION_MAX_TEMPORARY_IMAGES: 3/);
   assert.equal(workflow.includes("schedule:"), false);
   assert.equal(workflow.includes("ENABLE_CLOUD_IMAGE_WORKER"), false);
 });

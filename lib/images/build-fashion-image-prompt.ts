@@ -218,7 +218,7 @@ function conceptCompositionDirection(mode: TrendConceptCompositionMode) {
 }
 
 const TREND_CONCEPT_ANTI_TEXT =
-  "Create only an edge-to-edge fashion photograph. No poster layout, no magazine page, no footer, no caption area, no title bar, no border, no graphic panel, no typography, no letters, no numbers, no symbols, no imitation writing, no label, no watermark, no logo and no brand marks anywhere in the image. The website will add all interface text separately.";
+  "Create only an edge-to-edge fashion photograph. No poster layout, no magazine page, no footer, no caption area, no title bar, no border, no graphic panel, no typography, no letters, no numbers, no symbols, no imitation writing, no label, no watermark, no logo and no brand marks anywhere in the image. No sewn neck tags, no inner collar labels, no care tags, no brand tabs and no fake garment labels. If an inner neckline or collar is visible, it must be plain uninterrupted fabric with no tag patch, no red mark, no black mark and no letter-like details. The website will add all interface text separately.";
 
 function buildTrendConceptImagePrompt(input: FashionImagePromptInput) {
   const keyword = input.keyword.trim() || "fashion trend";

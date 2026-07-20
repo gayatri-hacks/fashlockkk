@@ -113,8 +113,8 @@ function suspiciousTagLikeClusters(words: OcrBox[], confidenceThreshold: number,
     .filter((word) => {
       if (!word.text || !isTagLikeRegion(word)) return false;
       const normalized = word.text.replace(/[^A-Za-z0-9]/g, "");
-      const looksLikeGlyphs = normalized.length >= Math.max(1, minWordLength - 1) && /[A-Za-z0-9]/.test(normalized);
-      return looksLikeGlyphs && word.confidence >= 0.28 && word.confidence < confidenceThreshold;
+      const looksLikeGlyphs = normalized.length >= Math.max(1, minWordLength - 1) || /[A-Za-z0-9]{1}/.test(word.text);
+      return looksLikeGlyphs && word.confidence >= 0.12 && word.confidence < confidenceThreshold;
     })
     .slice(0, 8);
 }

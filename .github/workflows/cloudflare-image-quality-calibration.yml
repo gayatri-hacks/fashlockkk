@@ -2,6 +2,11 @@ name: Cloudflare Image Quality Calibration
 
 on:
   workflow_dispatch:
+    inputs:
+      keywords:
+        description: Comma-separated safe keyword subset for manual calibration.
+        required: false
+        default: oversized,layering,kurta
 
 permissions:
   contents: read
@@ -12,7 +17,7 @@ concurrency:
 
 jobs:
   calibration:
-    name: Generate five temporary Cloudflare calibration images
+    name: Generate temporary Cloudflare calibration images
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -22,6 +27,8 @@ jobs:
       CLOUDFLARE_VISION_MODEL: ${{ vars.CLOUDFLARE_VISION_MODEL }}
       IMAGE_OCR_PROVIDER: ${{ vars.IMAGE_OCR_PROVIDER }}
       IMAGE_SEMANTIC_VALIDATOR_FALLBACK_PROVIDER: disabled
+      CALIBRATION_KEYWORDS: ${{ inputs.keywords }}
+      CALIBRATION_MAX_TEMPORARY_IMAGES: 3
       CALIBRATION_OUTPUT_DIR: .tmp/cloudflare-image-quality-calibration
 
     steps:
@@ -47,6 +54,7 @@ jobs:
           test -n "$CLOUDFLARE_IMAGE_MODEL" || (echo "CLOUDFLARE_IMAGE_MODEL repository variable is required" && exit 1)
           test -n "$CLOUDFLARE_VISION_MODEL" || (echo "CLOUDFLARE_VISION_MODEL repository variable is required" && exit 1)
           test "${IMAGE_OCR_PROVIDER:-local_tesseract}" = "local_tesseract" || (echo "IMAGE_OCR_PROVIDER must be local_tesseract for this calibration" && exit 1)
+          test -n "$CALIBRATION_KEYWORDS" || (echo "CALIBRATION_KEYWORDS input is required" && exit 1)
 
       - name: Run Cloudflare image quality calibration
         env:
