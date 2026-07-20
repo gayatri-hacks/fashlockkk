@@ -67,7 +67,8 @@ test("manual workflow owns Python market discovery and has no undefined endpoint
   assert.match(workflow,/actions\/setup-python@v5/);
   assert.match(workflow,/pip install -r scraper\/requirements\.txt/);
   assert.match(workflow,/test_discover_keyword_markets/);
-  assert.match(workflow,/run-manual-trend-styling-research\.ts --execute/);
+  assert.match(workflow,/run-manual-trend-styling-research\.ts "\$\{args\[@\]\}"/);
+  assert.match(workflow,/args\+=\(--execute\)/);
   const removedEndpoint=["TREND","MARKET","DISCOVERY","ENDPOINT"].join("_");
   const removedToken=["TREND","MARKET","DISCOVERY","TOKEN"].join("_");
   assert.equal(`${workflow}\n${worker}\n${provider}`.includes(removedEndpoint),false);

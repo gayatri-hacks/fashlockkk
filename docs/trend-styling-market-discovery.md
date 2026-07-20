@@ -54,6 +54,21 @@ No market-discovery URL or token is required. Optional tuning variables are:
 The manual workflow remains disabled by default. Formula-image enqueue remains
 separately disabled unless explicitly selected in the manual dispatch.
 
+## Controlled arbitrary-keyword test
+
+The public `formula-search` enqueue path is not an operational entry point.
+`TREND_SEARCH_RESEARCH_ENQUEUE_ENABLED` must remain `false` for public traffic
+until authentication, per-user throttling, rate limiting, and abuse protection
+are implemented and reviewed.
+
+For a controlled `linen` test, manually dispatch `Manual trend styling
+research` with `keyword=linen`, the intended market and season,
+`create_job=true`, and `execute=true`. Those two explicit confirmations cause
+the service-role worker to upsert one deterministic isolated concept and job,
+then claim that exact job ID. Keep `enqueue_images=false` until the six approved
+formulas and their evidence have been reviewed. Default and dry-run dispatches
+perform no database writes and no provider calls.
+
 ## Migration and verification
 
 Migrations 027, 028, 029, and 030 are deployed prerequisites. Before any

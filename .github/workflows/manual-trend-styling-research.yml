@@ -2,6 +2,42 @@ name: Manual trend styling research
 on:
   workflow_dispatch:
     inputs:
+      keyword:
+        description: "Canonical fashion keyword to research"
+        required: true
+        default: "linen"
+        type: string
+      market:
+        description: "Requesting user market"
+        required: true
+        default: "IN"
+        type: choice
+        options:
+          - "IN"
+          - "US"
+          - "GB"
+          - "FR"
+          - "IT"
+          - "DE"
+          - "JP"
+          - "KR"
+          - "AU"
+          - "BR"
+          - "SG"
+          - "AE"
+      season:
+        description: "Bounded styling season label"
+        required: true
+        default: "current"
+        type: string
+      create_job:
+        description: "Create the single isolated research job (disabled by default)"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
       execute:
         description: "Run one claimed styling-research job (disabled by default)"
         required: true
@@ -79,9 +115,28 @@ jobs:
           if [ "$missing" -ne 0 ]; then exit 1; fi
       - name: Run repo-owned market discovery before styling evidence collection
         shell: bash
+        env:
+          MANUAL_STYLING_KEYWORD: ${{ inputs.keyword }}
+          MANUAL_STYLING_MARKET: ${{ inputs.market }}
+          MANUAL_STYLING_SEASON: ${{ inputs.season }}
+          MANUAL_STYLING_CREATE_JOB: ${{ inputs.create_job }}
+          MANUAL_STYLING_EXECUTE: ${{ inputs.execute }}
         run: |
-          if [ "${{ inputs.execute }}" = "true" ]; then
-            node --import tsx scripts/run-manual-trend-styling-research.ts --execute
-          else
-            node --import tsx scripts/run-manual-trend-styling-research.ts --dry-run
+          set -euo pipefail
+          args=(
+            --keyword "$MANUAL_STYLING_KEYWORD"
+            --market "$MANUAL_STYLING_MARKET"
+            --season "$MANUAL_STYLING_SEASON"
+          )
+          if [ "$MANUAL_STYLING_CREATE_JOB" = "true" ]; then
+            args+=(--create-job)
           fi
+          if [ "$MANUAL_STYLING_EXECUTE" = "true" ]; then
+            args+=(--execute)
+            if [ "$MANUAL_STYLING_CREATE_JOB" = "true" ]; then
+              args+=(--confirm-manual-job-creation)
+            fi
+          else
+            args+=(--dry-run)
+          fi
+          node --import tsx scripts/run-manual-trend-styling-research.ts "${args[@]}"
