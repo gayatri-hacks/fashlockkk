@@ -484,7 +484,7 @@ class CloudflareDefectValidator implements ImageDefectValidator {
       });
 
       if (response.status === 429) {
-        throw new RetryableImageGenerationError("Cloudflare defect validator quota exceeded", parseRetryAfter(response.headers.get("retry-after")));
+        throw new RetryableImageGenerationError("Cloudflare defect validator quota exceeded", parseRetryAfter(response.headers.get("retry-after")), "cloudflare");
       }
       if (!response.ok) {
         return unavailableDefectValidation(this.provider, `Cloudflare defect validator returned ${response.status}`);

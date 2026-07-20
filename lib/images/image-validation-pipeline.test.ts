@@ -13,6 +13,7 @@ import {
   validateTrendConceptCandidate,
 } from "@/lib/images/trend-concept-validation";
 import { isTrendImageAutoEnqueueEnabled } from "@/lib/trends/config";
+import { buildCloudflareQuotaDeferral, localQuotaFallbackEnabled } from "@/lib/images/image-quota-deferral";
 
 const noTextOcr: OcrProvider = {
   provider: "stub",
@@ -938,6 +939,12 @@ test("quota retry metadata path does not target unrelated variants", () => {
   assert.equal(claim.args.desired_variant, "trend_concept");
   assert.equal(["trend_women", "trend_men", "trend_hero"].includes(claim.args.desired_variant), false);
 });
+
+test("Cloudflare quota defers without permanent failure and records safe retry metadata",()=>{const update=buildCloudflareQuotaDeferral({metadata:{formulaId:"formula-1"}},new RetryableImageGenerationError("quota",120,"cloudflare"),new Date("2026-07-20T00:00:00.000Z"));assert.equal(update.status,"deferred");assert.equal(update.deferred_provider,"cloudflare");assert.equal(update.deferred_reason,"quota_exhausted");assert.equal(update.retry_after,"2026-07-20T00:02:00.000Z");assert.equal(update.metadata.provider,"cloudflare");assert.equal(update.metadata.reason,"quota_exhausted");assert.equal((update.metadata as Record<string,unknown>).formulaId,"formula-1");assert.equal("image_url" in update,false);});
+
+test("local Ollama quota fallback is explicit and passed to quota-aware claim",()=>{assert.equal(localQuotaFallbackEnabled({...process.env,ENABLE_LOCAL_OLLAMA_QUOTA_FALLBACK:"false"}),false);assert.equal(localQuotaFallbackEnabled({...process.env,ENABLE_LOCAL_OLLAMA_QUOTA_FALLBACK:"true"}),true);const blocked=buildImageWorkerClaimRpc({workerId:"local",lockTimeoutMinutes:30,workerProvider:"ollama",allowLocalFallback:false});const allowed=buildImageWorkerClaimRpc({workerId:"local",lockTimeoutMinutes:30,workerProvider:"ollama",allowLocalFallback:true});assert.equal(blocked.name,"claim_next_image_generation_job_with_quota_policy");assert.equal(blocked.args.allow_local_fallback,false);assert.equal(allowed.args.allow_local_fallback,true);});
+
+test("quota migration gates deferred claims and worker stops after one quota response",()=>{const sql=readFileSync("database/029_image_quota_deferral.sql","utf8").toLowerCase();const worker=readFileSync("scripts/ollama-image-worker.ts","utf8");assert.ok(sql.includes("status='deferred'"));assert.ok(sql.includes("retry_after<=now()"));assert.ok(sql.includes("worker_provider='ollama' and allow_local_fallback=true"));assert.ok(sql.includes("for update skip locked"));const start=worker.lastIndexOf("if (error instanceof RetryableImageGenerationError && error.provider === \"cloudflare\")");const quotaBlock=worker.slice(start,worker.indexOf("} else {",start));assert.ok(quotaBlock.includes("deferCloudflareQuotaJob"));assert.ok(quotaBlock.includes("stopping = true"));assert.equal(quotaBlock.includes("markFailed"),false);});
 
 test("all failed candidates select no image, preserving the current production image", () => {
   const brief = buildTrendImageBrief("baggy");

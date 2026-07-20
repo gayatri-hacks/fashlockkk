@@ -285,7 +285,7 @@ async function fetchJsonWithRetryableQuota(
     const response = await fetch(url, { ...init, signal: controller.signal });
     if (response.status === 429) {
       const retryAfter = Number(response.headers.get("retry-after") || 86400);
-      throw new RetryableImageGenerationError(`${provider} semantic validator quota exceeded`, retryAfter);
+      throw new RetryableImageGenerationError(`${provider} semantic validator quota exceeded`, retryAfter, provider === "cloudflare" ? "cloudflare" : undefined);
     }
     if (!response.ok) {
       return { unavailableError: `${provider} semantic validator returned ${response.status}` };

@@ -18,16 +18,30 @@ type MarketData = {
 type GenderEdit = 'women' | 'men'
 
 type StyleFormula = {
+  id?: string
   occasion: string
   formula: string
   why: string
+  formula_slot?: 'easy_entry' | 'current_uniform' | 'editorial_push'
+  title?: string
+  items?: Array<{ role: string; garment: string; silhouette: string; colour: string; material: string; styling_instruction: string }>
+  footwear?: string
+  accessories?: string[]
+  climate?: string
+  season?: string
+  region?: string
+  confidence?: number
+  generated_at?: string
+  image_url?: string | null
+  image_status?: string
 }
 
 type StyleModeData = {
-  welcome: string
+  welcome?: string
   formulas: Record<GenderEdit, StyleFormula[]>
-  avoidThis: string
-  starterSearchTerm: string
+  avoidThis?: string
+  starterSearchTerm?: string
+  states?: Partial<Record<GenderEdit, string>>
 }
 
 type OutfitImageResult = {
@@ -199,13 +213,28 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
       try {
         setStyleLoading(true)
         const params = new URLSearchParams({
+          trendId: String(trend.id),
           keyword: trend.keyword,
           editorialName: trend.editorialName,
+          region: trend.topMarkets[0]?.code || 'IN',
         })
         const response = await fetch(`/api/trends/style?${params.toString()}`)
         if (response.ok) {
           const data = await response.json()
-          setStyleData(data)
+          const normalized = {
+            ...data,
+            formulas: Object.fromEntries(
+              Object.entries(data.formulas || {}).map(([audience, values]) => [
+                audience,
+                (values as any[]).map((value) => ({
+                  ...value,
+                  formula: value.items?.map((item: any) => `${item.colour} ${item.material} ${item.garment} (${item.silhouette})`).join(' + ') || '',
+                  why: value.why_it_works || '',
+                })),
+              ]),
+            ),
+          } as StyleModeData
+          setStyleData(normalized)
         }
       } catch (error) {
         console.error('Failed to load style mode:', error)
@@ -232,40 +261,6 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
 
     loadMarkets()
   }, [trend.keyword])
-
-  useEffect(() => {
-    if (styleData?.formulas?.women?.length) {
-      loadOutfitImages(styleData.formulas.women, 'women')
-    }
-    if (styleData?.formulas?.men?.length) {
-      loadOutfitImages(styleData.formulas.men, 'men')
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [styleData?.formulas?.women, styleData?.formulas?.men])
-
-  useEffect(() => {
-    if (genderEdit === 'men' && styleData?.formulas?.men?.length) {
-      loadOutfitImages(styleData.formulas.men, 'men')
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [genderEdit, styleData?.formulas?.men])
-
-  useEffect(() => {
-    if (!formulas.length) return
-
-    const hasPendingImage = formulas
-      .slice(0, 3)
-      .some((formula) => outfitImages[genderEdit][outfitImageKey(formula, genderEdit)]?.status === 'pending')
-
-    if (!hasPendingImage) return
-
-    const timer = window.setInterval(() => {
-      loadOutfitImages(formulas, genderEdit)
-    }, 10000)
-
-    return () => window.clearInterval(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formulas, genderEdit, outfitImages])
 
   return (
     <div style={{ backgroundColor: '#FAF7F4', minHeight: '100vh' }}>
@@ -351,7 +346,7 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
               margin: '28px 0 0',
             }}
           >
-            {styleData?.welcome}
+            {styleData?.welcome || `A closer look at how ${trend.editorialName} is being worn now.`}
           </p>
         )}
         <div
@@ -371,11 +366,11 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
 
       <section className="style-section" style={{ backgroundColor: '#F0EBE3', padding: '56px 48px' }}>
         <SectionLabel>YOUR EDIT</SectionLabel>
-        <SectionTitle>Can you wear it?</SectionTitle>
+        <SectionTitle>How people are wearing it now</SectionTitle>
         <div style={{ display: 'flex', gap: '22px', marginTop: '22px' }}>
           {[
-            { label: 'HER EDIT', value: 'women' as GenderEdit },
-            { label: 'HIS EDIT', value: 'men' as GenderEdit },
+            { label: 'HER', value: 'women' as GenderEdit },
+            { label: 'HIM', value: 'men' as GenderEdit },
           ].map((tab) => (
             <button
               key={tab.value}
@@ -404,14 +399,20 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
               <div key={index} style={{ height: '668px', backgroundColor: '#E8E0D4', borderRadius: '2px', animation: 'stylePulse 1.6s infinite' }} />
             ))}
           </div>
+        ) : !formulas.length ? (
+          <div role="status" style={{ marginTop: '28px', padding: '28px', background: '#FAF7F4', color: '#8C7B6E', fontFamily: 'var(--font-dm-sans)', lineHeight: 1.7 }}>
+            Approved formulas are temporarily unavailable. We will keep showing the last approved set whenever one exists—no generic substitute has been inserted.
+          </div>
         ) : (
+          <>
+          {styleData?.states?.[genderEdit] === 'retained_previous' ? <div role="status" style={{ marginTop: '20px', color: '#8C6030', fontFamily: 'var(--font-dm-sans)', fontSize: '11px' }}>Showing the retained approved version while a fresher set is reviewed.</div> : null}
           <div className="style-formula-grid" style={{ display: 'grid', gap: '20px', marginTop: '28px' }}>
-            {formulas.map((formula, index) => {
+            {formulas.slice(0, 3).map((formula, index) => {
               const key = outfitImageKey(formula, genderEdit)
               const imageResult = outfitImages[genderEdit][key]
-              const imageUrl = imageResult?.imageUrl
-              const isImageLoading = outfitImageLoading[genderEdit][key] || imageResult === undefined
-              const isImagePending = imageResult?.status === 'pending'
+              const imageUrl = formula.image_url || imageResult?.imageUrl
+              const isImageLoading = false
+              const isImagePending = formula.image_status === 'pending'
               const imageRejected = imageUrl === null && !isImageLoading && !isImagePending
               const sourceLabel =
                 isImagePending
@@ -506,19 +507,27 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
 
                   <div style={{ backgroundColor: '#FAF7F4', padding: '20px 24px' }}>
                     <div style={{ fontFamily: 'var(--font-dm-sans)', fontSize: '8px', fontWeight: 200, color: '#B03A5B', letterSpacing: '3px', textTransform: 'uppercase' }}>
-                      {formula.occasion}
+                      {(formula.formula_slot || formula.occasion).replace(/_/g, ' ')}
                     </div>
+                    {formula.title ? <div style={{ fontFamily: 'var(--font-cormorant)', fontSize: '24px', color: '#2C2418', marginTop: '8px' }}>{formula.title}</div> : null}
                     <div style={{ fontFamily: 'var(--font-cormorant)', fontSize: '20px', fontWeight: 300, fontStyle: 'italic', color: '#2C2418', lineHeight: 1.6, marginTop: '12px' }}>
                       {formula.formula}
                     </div>
                     <p style={{ fontFamily: 'var(--font-dm-sans)', fontSize: '11px', fontWeight: 300, color: '#8C7B6E', margin: '8px 0 0', lineHeight: 1.7 }}>
                       {formula.why}
                     </p>
+                    {formula.items?.map((item) => <div key={`${item.role}-${item.garment}`} style={{ fontFamily: 'var(--font-dm-sans)', fontSize: '10px', color: '#5F554B', marginTop: '9px', lineHeight: 1.5 }}><strong>{item.role}:</strong> {item.colour} {item.material} {item.garment} · {item.silhouette}<br />{item.styling_instruction}</div>)}
+                    <div style={{ fontFamily: 'var(--font-dm-sans)', fontSize: '10px', color: '#8C7B6E', marginTop: '12px', lineHeight: 1.6 }}>Footwear: {formula.footwear}<br />Accessory: {formula.accessories?.join(', ')}<br />{formula.occasion} · {formula.season} · {formula.climate} · {formula.region}<br />Fresh {formula.generated_at ? new Date(formula.generated_at).toLocaleDateString() : '—'} · {formula.confidence != null ? `${Math.round(formula.confidence * 100)}% confidence` : ''}</div>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
+                      <button aria-label={`Save ${formula.title || formula.occasion}`} onClick={() => formula.id && fetch('/api/trends/formula-feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ formulaId: formula.id, action: 'saved', sessionId: localStorage.getItem('fashlock_session_id') || crypto.randomUUID() }) })} style={{ border: '1px solid #B03A5B', background: 'transparent', color: '#B03A5B', padding: '9px 14px', cursor: 'pointer' }}>Save</button>
+                      <a href={`/style?trendId=${encodeURIComponent(String(trend.id))}&keyword=${encodeURIComponent(trend.keyword)}&formulaId=${encodeURIComponent(formula.id || '')}&audience=${genderEdit}&market=${encodeURIComponent(formula.region || trend.topMarkets[0]?.code || 'IN')}&source=trend-card`} onClick={() => formula.id && fetch('/api/trends/formula-feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ formulaId: formula.id, action: 'opened_in_laila', sessionId: localStorage.getItem('fashlock_session_id') || crypto.randomUUID() }), keepalive: true })} style={{ background: '#B03A5B', color: '#fff', padding: '10px 16px', textDecoration: 'none', fontFamily: 'var(--font-dm-sans)', fontSize: '11px' }}>Make it mine with Laila</a>
+                    </div>
                   </div>
                 </div>
               )
             })}
           </div>
+          </>
         )}
       </section>
 
@@ -528,7 +537,7 @@ export default function TrendDeepDive({ trend, onBack }: TrendDeepDiveProps) {
           <div style={{ width: 'min(600px, 100%)', height: '68px', backgroundColor: '#E8E0D4', borderRadius: '2px', marginTop: '18px', animation: 'stylePulse 1.6s infinite' }} />
         ) : (
           <p style={{ fontFamily: 'var(--font-cormorant)', fontSize: '20px', fontWeight: 300, fontStyle: 'italic', color: '#2C2418', maxWidth: '600px', margin: '18px 0 0', lineHeight: 1.7 }}>
-            {styleData?.avoidThis}
+            {styleData?.avoidThis || 'Approved styling guidance is retained until fresh evidence passes review.'}
           </p>
         )}
       </section>

@@ -5,7 +5,7 @@ import {
   TREND_IMAGE_PROMPT_VERSION,
 } from "@/lib/images/trend-image-brief";
 
-export const FASHION_IMAGE_VARIANTS = ["trend_concept", "trend_hero", "trend_women", "trend_men", "deep_dive", "daily_edit"] as const;
+export const FASHION_IMAGE_VARIANTS = ["trend_concept", "trend_hero", "trend_women", "trend_men", "trend_formula_women", "trend_formula_men", "deep_dive", "daily_edit"] as const;
 
 export type FashionImageVariant = (typeof FASHION_IMAGE_VARIANTS)[number];
 export type FashionImageEntityType = "trend";

@@ -6,6 +6,7 @@ import { createImageGenerator, RetryableImageGenerationError } from "../lib/imag
 import { analyzeImagePixels, createOcrProvider, disposeOcrProvider } from "../lib/images/image-pixel-analysis";
 import { createImageSemanticValidator } from "../lib/images/image-semantic-validator";
 import { buildImageWorkerClaimRpc, parseImageWorkerVariant } from "../lib/images/image-worker-claim";
+import { buildCloudflareQuotaDeferral, localQuotaFallbackEnabled } from "../lib/images/image-quota-deferral";
 import { buildTrendImageBrief } from "../lib/images/trend-image-brief";
 import {
   candidateFactsFromAnalysis,
@@ -46,6 +47,7 @@ const imageGenerator = createImageGenerator();
 const semanticValidator = createImageSemanticValidator();
 const ocrProvider = createOcrProvider();
 const workerVariant = parseImageWorkerVariant(process.env.IMAGE_WORKER_VARIANT);
+const allowLocalQuotaFallback = imageGenerator.provider === "ollama" && localQuotaFallbackEnabled();
 
 let stopping = false;
 
@@ -81,6 +83,8 @@ async function claimJob() {
     workerId,
     lockTimeoutMinutes,
     desiredVariant: workerVariant,
+    workerProvider: imageGenerator.provider,
+    allowLocalFallback: allowLocalQuotaFallback,
   });
   const { data, error } = await supabase.rpc(claimRpc.name, claimRpc.args);
 
@@ -261,27 +265,15 @@ async function markFailed(job: ImageGenerationJob, error: unknown) {
   }
 }
 
-async function markRetryableReview(job: ImageGenerationJob, error: RetryableImageGenerationError) {
-  const retryAfter = new Date(Date.now() + (error.retryAfterSeconds || 86400) * 1000).toISOString();
-  const message = `${error.message}; retry after ${retryAfter}`;
+async function deferCloudflareQuotaJob(job: ImageGenerationJob, error: RetryableImageGenerationError) {
+  const update = buildCloudflareQuotaDeferral(job, error);
   const { error: updateError } = await supabase
     .from("image_generation_jobs")
-    .update({
-      status: "pending",
-      locked_at: null,
-      locked_by: null,
-      error_message: message,
-      metadata: {
-        ...(job.metadata || {}),
-        validationStatus: "retryable_review",
-        retryAfter,
-        retryReason: error.message,
-      },
-    })
+    .update(update)
     .eq("id", job.id);
 
   if (updateError) {
-    await markFailed(job, new Error(`retryable review update failed: ${message}`));
+    console.error(`Quota deferral update failed for ${job.id}; leaving the job recoverable by lock timeout: ${updateError.message}`);
   }
 }
 
@@ -578,8 +570,8 @@ async function main() {
         console.log(`Completed job ${job.id}`);
       } catch (error) {
         console.error(`Job ${job.id} failed: ${error instanceof Error ? error.message : String(error)}`);
-        if (error instanceof RetryableImageGenerationError) {
-          await markRetryableReview(job, error);
+        if (error instanceof RetryableImageGenerationError && error.provider === "cloudflare") {
+          await deferCloudflareQuotaJob(job, error);
           stopping = true;
         } else {
           await markFailed(job, error);

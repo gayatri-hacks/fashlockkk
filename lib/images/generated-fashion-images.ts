@@ -137,6 +137,10 @@ export function buildTrendImageJobPayload({
   gender,
   model = DEFAULT_OLLAMA_IMAGE_MODEL,
   imageSize,
+  formulaId,
+  formulaHash,
+  evidenceHash,
+  formulaSlot,
 }: {
   trend: TrendImageSeed;
   variant: FashionImageVariant;
@@ -145,6 +149,10 @@ export function buildTrendImageJobPayload({
   gender?: "women" | "men" | null;
   model?: string;
   imageSize?: string;
+  formulaId?: string | null;
+  formulaHash?: string | null;
+  evidenceHash?: string | null;
+  formulaSlot?: "easy_entry" | "current_uniform" | "editorial_push" | null;
 }) {
   const resolvedImageSize = imageSize || (variant === "trend_concept" ? DEFAULT_OLLAMA_CONCEPT_IMAGE_SIZE : DEFAULT_OLLAMA_IMAGE_SIZE);
   const trendConceptBrief = variant === "trend_concept" ? buildTrendImageBrief(trend.keyword) : null;
@@ -184,6 +192,11 @@ export function buildTrendImageJobPayload({
       outfitFormula: outfitFormula || null,
       outfitOccasion: outfitOccasion || null,
       gender: gender || null,
+      formulaId: formulaId || null,
+      formulaHash: formulaHash || null,
+      evidenceHash: evidenceHash || null,
+      audience: gender || null,
+      formulaSlot: formulaSlot || null,
     },
   };
 }
@@ -198,6 +211,10 @@ export async function enqueueTrendImageJob({
   priority = 0,
   model = DEFAULT_OLLAMA_IMAGE_MODEL,
   imageSize,
+  formulaId,
+  formulaHash,
+  evidenceHash,
+  formulaSlot,
 }: {
   trend: TrendImageSeed;
   variant: FashionImageVariant;
@@ -208,11 +225,15 @@ export async function enqueueTrendImageJob({
   priority?: number;
   model?: string;
   imageSize?: string;
+  formulaId?: string | null;
+  formulaHash?: string | null;
+  evidenceHash?: string | null;
+  formulaSlot?: "easy_entry" | "current_uniform" | "editorial_push" | null;
 }) {
   const supabase = getSupabaseClient();
   if (!supabase) throw new Error("Supabase service credentials are required");
 
-  const payload = buildTrendImageJobPayload({ trend, variant, outfitFormula, outfitOccasion, gender, model, imageSize });
+  const payload = buildTrendImageJobPayload({ trend, variant, outfitFormula, outfitOccasion, gender, model, imageSize, formulaId, formulaHash, evidenceHash, formulaSlot });
 
   if (!force) {
     if (variant === "trend_concept") {
@@ -231,7 +252,7 @@ export async function enqueueTrendImageJob({
         .eq("entity_type", "trend")
         .eq("entity_id", trend.id)
         .eq("variant", variant)
-        .in("status", ["pending", "processing", "completed"])
+        .in("status", ["pending", "deferred", "processing", "completed"])
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();

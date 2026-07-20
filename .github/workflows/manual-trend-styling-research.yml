@@ -1,0 +1,87 @@
+name: Manual trend styling research
+on:
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: "Run one claimed styling-research job (disabled by default)"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      enqueue_images:
+        description: "Enqueue six formula images only after approval"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+permissions:
+  contents: read
+concurrency:
+  group: manual-trend-styling-research
+  cancel-in-progress: false
+jobs:
+  styling-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      TREND_STYLING_INTELLIGENCE_ENABLED: ${{ inputs.execute == 'true' && 'true' || 'false' }}
+      ENABLE_WEEKLY_TREND_STYLE_REFRESH: "false"
+      TREND_SEARCH_RESEARCH_ENQUEUE_ENABLED: "false"
+      AUTO_ENQUEUE_FORMULA_IMAGES_ENABLED: ${{ inputs.execute == 'true' && inputs.enqueue_images == 'true' && 'true' || 'false' }}
+      TREND_MARKET_DISCOVERY_MAX_PROVIDER_CALLS: "18"
+      TREND_MARKET_DISCOVERY_MAX_ATTEMPTS: "3"
+      TREND_MARKET_DISCOVERY_REQUEST_DELAY_SECONDS: "12"
+      TREND_MARKET_DISCOVERY_CACHE_TTL_HOURS: "24"
+      TREND_MARKET_DISCOVERY_TIMEOUT_MS: "360000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Restore bounded market-discovery cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/trend-styling-market-discovery
+          key: trend-styling-market-discovery-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            trend-styling-market-discovery-${{ runner.os }}-
+      - run: npm ci
+      - name: Install repository Google Trends collector dependencies
+        run: python -m pip install -r scraper/requirements.txt
+      - name: Verify market discovery without provider calls
+        run: |
+          python -B -m py_compile scraper/discover_keyword_markets.py
+          python -B -m unittest scraper/test_discover_keyword_markets.py
+      - name: Validate execution secrets
+        if: ${{ inputs.execute == 'true' }}
+        shell: bash
+        run: |
+          missing=0
+          for name in NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SERPER_API_KEY GEMINI_API_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error title=Missing secret::$name is required for manual styling research"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+      - name: Run repo-owned market discovery before styling evidence collection
+        shell: bash
+        run: |
+          if [ "${{ inputs.execute }}" = "true" ]; then
+            node --import tsx scripts/run-manual-trend-styling-research.ts --execute
+          else
+            node --import tsx scripts/run-manual-trend-styling-research.ts --dry-run
+          fi

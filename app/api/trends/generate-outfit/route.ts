@@ -134,28 +134,8 @@ export async function POST(req: Request) {
     }
 
     if (assetContext === "trend-detail") {
-      const enqueueTrendId =
-        trendKeyword ? syntheticTrendIdForKeyword(trendKeyword) : candidateTrendIds[0];
-
-      if (enqueueTrendId) {
-        try {
-          await enqueueTrendImageJob({
-            trend: {
-              id: enqueueTrendId,
-              keyword: trendKeyword || formula,
-              editorialName: trendKeyword || outfitTitle,
-            },
-            variant,
-            outfitFormula,
-            outfitOccasion: occasion || outfitTitle,
-            gender,
-            priority: 5,
-          });
-        } catch (error) {
-          console.warn("Trend detail image enqueue skipped:", error instanceof Error ? error.message : error);
-        }
-      }
-
+      // Page requests are cache reads only. Formula-image jobs are created by the
+      // manual/background planner, never by a trend-card click.
       return NextResponse.json({
         imageUrl: null,
         imageSource: "fallback",

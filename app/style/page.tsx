@@ -13,6 +13,7 @@ import {
   type LookVariation as StyleIdeaVariation,
   type StyleIdea,
 } from "@/lib/look-library";
+import { buildLailaPersonalisationPrompt, readLailaTrendContext } from "@/lib/trend-styling/laila-handoff";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -1362,6 +1363,7 @@ export default function StylePage() {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const returningGreetingLoaded = useRef(false);
   const wardrobeHandoffLoaded = useRef(false);
+  const trendHandoffLoaded = useRef(false);
 
   const analysisTexts = ["Reading your style...", "Analysing your vibe...", "Understanding your aesthetic...", "Seeing what works..."];
   const hasPhotoAnalysis = Boolean(
@@ -1514,6 +1516,23 @@ export default function StylePage() {
       textareaRef.current?.focus();
       textareaRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 0);
+  }, []);
+
+  useEffect(() => {
+    if (trendHandoffLoaded.current) return;
+    const context = readLailaTrendContext(new URLSearchParams(window.location.search));
+    if (!context) return;
+    trendHandoffLoaded.current = true;
+    setGender(context.audience === "men" ? "male" : "female");
+    setFlowState("chat");
+    fetch("/api/wardrobe/items")
+      .then((response) => response.ok ? response.json() : { items: [] })
+      .then((payload) => {
+        const wardrobe = (payload.items || []).slice(0, 20).map((item: { name?: string; color?: string }) => [item.color, item.name].filter(Boolean).join(" "));
+        setInput(buildLailaPersonalisationPrompt(context, wardrobe));
+        window.setTimeout(() => { textareaRef.current?.focus(); textareaRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }, 0);
+      })
+      .catch(() => setInput(buildLailaPersonalisationPrompt(context)));
   }, []);
 
   useEffect(() => {

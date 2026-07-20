@@ -23,11 +23,15 @@ export interface ImageGenerator {
 
 export class RetryableImageGenerationError extends Error {
   readonly retryAfterSeconds?: number;
+  readonly provider?: ImageGenerationProvider;
+  readonly reason: "quota_exhausted";
 
-  constructor(message: string, retryAfterSeconds?: number) {
+  constructor(message: string, retryAfterSeconds?: number, provider?: ImageGenerationProvider) {
     super(message);
     this.name = "RetryableImageGenerationError";
     this.retryAfterSeconds = retryAfterSeconds;
+    this.provider = provider;
+    this.reason = "quota_exhausted";
   }
 }
 
@@ -171,6 +175,7 @@ class CloudflareImageGenerator implements ImageGenerator {
         throw new RetryableImageGenerationError(
           "Cloudflare image generation quota exhausted",
           parseRetryAfter(response.headers.get("retry-after")),
+          "cloudflare",
         );
       }
 
