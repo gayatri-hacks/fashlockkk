@@ -56,9 +56,10 @@ separately disabled unless explicitly selected in the manual dispatch.
 
 ## Migration and verification
 
-Migrations 027, 028, and 029 are deployed prerequisites. The provider requires
-the pending additive `database/030_repo_owned_market_discovery.sql` migration.
-Do not run the workflow in execute mode before 030 passes review and is applied.
+Migrations 027, 028, 029, and 030 are deployed prerequisites. Before any
+controlled execution, run the consolidated read-only verification and require
+`all_styling_migration_checks_passed = true`. Production verification currently
+passes all 31 checks.
 
 Provider-free verification:
 
