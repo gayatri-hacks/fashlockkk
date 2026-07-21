@@ -47,7 +47,7 @@ export interface ResearchStore {
   loadMarketEvidence?(job:ResearchJob,now:Date):Promise<MarketDiscoveryBatch|null>;
   saveMarketEvidence?(job:ResearchJob,batch:MarketDiscoveryBatch,now:Date):Promise<void>;
   insertEvidence(rows: EvidenceInsert[]): Promise<void>;
-  complete(job: ResearchJob, data: { selectedMarkets: string[]; evaluatedMarkets: string[]; selectedReasons:Record<string,string[]>; evidenceHash: string }): Promise<void>;
+  checkpointEvidence(job: ResearchJob, data: { selectedMarkets: string[]; evaluatedMarkets: string[]; selectedReasons:Record<string,string[]>; evidenceHash: string }): Promise<void>;
   retry(job: ResearchJob, error: string, retryAfter?:string|null): Promise<void>;
   deferQuota?(job: ResearchJob, error: ResearchQuotaDeferral): Promise<void>;
 }
@@ -164,8 +164,8 @@ export async function runResearchWorker(input: {
     if(new Set(unique.map((row)=>row.source_domain)).size<2) throw new Error("insufficient independent fresh evidence");
     await input.store.insertEvidence(unique);
     const evidenceHash=createHash("sha256").update(JSON.stringify(unique.map((row)=>[row.content_fingerprint,row.region,row.audience,row.published_at]).sort())).digest("hex");
-    await input.store.complete(job,{selectedMarkets:plan.researchMarkets,evaluatedMarkets:plan.evaluatedMarkets,selectedReasons:plan.selectedReasons,evidenceHash});
-    return {status:"completed" as const,job,evidence:unique,marketPlan:plan,marketDiscovery:discovery,marketSource};
+    await input.store.checkpointEvidence(job,{selectedMarkets:plan.researchMarkets,evaluatedMarkets:plan.evaluatedMarkets,selectedReasons:plan.selectedReasons,evidenceHash});
+    return {status:"evidence_ready" as const,job,evidence:unique,marketPlan:plan,marketDiscovery:discovery,marketSource,evidenceHash};
   } catch(error){
     const message=safeErrorMessage(error);
     if (error instanceof EvidenceProviderQuotaError) {
@@ -254,7 +254,7 @@ export function createSupabaseResearchStore(options: { exactJobId?: string } = {
       }
     },
     async insertEvidence(rows){const {error}=await db.from("trend_style_evidence").insert(rows);if(error)throw error;},
-    async complete(job,data){const {error}=await db.from("trend_style_research_jobs").update({status:"completed",selected_markets:data.selectedMarkets,evaluated_markets:data.evaluatedMarkets,selected_market_reasons:data.selectedReasons,evidence_hash:data.evidenceHash,retry_after:null,completed_at:new Date().toISOString()}).eq("id",job.id);if(error)throw error;},
+    async checkpointEvidence(job,data){const {data:checkpoint,error}=await db.rpc("mark_trend_style_research_evidence_ready",{target_job_id:job.id,expected_claimed_attempts:job.attempts,selected:data.selectedMarkets,evaluated:data.evaluatedMarkets,selection_reasons:data.selectedReasons,completed_evidence_hash:data.evidenceHash});if(error)throw error;if(!checkpoint)throw new Error("Evidence checkpoint did not match the claimed research job");},
     async retry(job,errorMessage,retryAfter){const terminal=job.attempts>=job.max_attempts;const {error}=await db.from("trend_style_research_jobs").update({status:terminal?"failed":"pending",error_message:errorMessage.slice(0,500),retry_after:terminal?null:retryAfter||null}).eq("id",job.id);if(error)throw error;},
     async deferQuota(job,error){const {data,error:rpcError}=await db.rpc("defer_trend_style_research_job_quota",{target_job_id:job.id,expected_claimed_attempts:job.attempts,retry_at:error.retryAfter,safe_error_message:error.message});if(rpcError)throw rpcError;if(!data)throw new Error("Quota deferral did not match the claimed research job");},
   };

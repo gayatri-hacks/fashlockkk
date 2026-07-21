@@ -262,6 +262,41 @@ with checks(phase,check_name,passed,details) as (
       ),
     'recovery only releases one matching pending attempt and does not delete concept, evidence or formulas'
 
+  union all select '032_prerequisite','formula completion state migration prerequisites exist',
+    to_regclass('public.trend_style_research_jobs') is not null
+      and to_regclass('public.trend_style_evidence') is not null
+      and to_regclass('public.trend_outfit_formulas') is not null,
+    'research jobs, saved evidence and formulas from 027-031'
+
+  union all select '032','job status constraint retains legacy states and adds formula states',
+    exists(
+      select 1 from pg_constraint c
+      where c.connamespace='public'::regnamespace and c.conname='trend_style_research_jobs_status_check'
+        and pg_get_constraintdef(c.oid) ilike all(array[
+          '%pending%','%researching%','%validating%','%images_pending%','%completed%',
+          '%insufficient_evidence%','%failed%','%evidence_ready%','%formula_generating%'
+        ])
+    ) and exists(select 1 from pg_indexes where schemaname='public' and indexname='trend_style_research_jobs_formula_active_uidx' and indexdef ilike '%evidence_ready%' and indexdef ilike '%formula_generating%'),
+    'all deployed statuses remain valid and active formula states retain uniqueness'
+
+  union all select '032','evidence checkpoint and formula claim RPCs enforce ordered transitions',
+    coalesce(regexp_replace(pg_get_functiondef(to_regprocedure('public.mark_trend_style_research_evidence_ready(uuid,integer,text[],text[],jsonb,text)')),'\s+','','g') ilike '%status=''evidence_ready''%status=''researching''%attempts=expected_claimed_attempts%',false)
+      and coalesce(regexp_replace(pg_get_functiondef(to_regprocedure('public.begin_trend_style_formula_generation(uuid)')),'\s+','','g') ilike '%status=''formula_generating''%status=''evidence_ready''%retry_after%',false),
+    'research checkpoints evidence; due evidence-ready jobs alone claim formula generation'
+
+  union all select '032','formula quota and non-quota failures return to evidence_ready',
+    coalesce(regexp_replace(pg_get_functiondef(to_regprocedure('public.defer_trend_style_formula_quota(uuid,timestamptz,text)')),'\s+','','g') ilike '%status=''evidence_ready''%retry_after=retry_at%status=''formula_generating''%',false)
+      and coalesce(regexp_replace(pg_get_functiondef(to_regprocedure('public.return_trend_style_formula_to_evidence_ready(uuid,text)')),'\s+','','g') ilike '%status=''evidence_ready''%status=''formula_generating''%',false),
+    'formula failures preserve evidence and do not increment research attempts'
+
+  union all select '032','atomic approval completes only an exact approved 2x3 matrix',
+    coalesce(regexp_replace(pg_get_functiondef(to_regprocedure('public.approve_trend_formula_set_and_complete_job(uuid,uuid)')),'\s+','','g') ilike '%formula_count<>6%matrix_count<>6%approved_count<>6%status=''completed''%',false),
+    'owner and evidence hash checks, approval, six-row read-back and completion share one transaction'
+
+  union all select '032','exact linen resume is hard-bound and zero-approved guarded',
+    coalesce(regexp_replace(pg_get_functiondef(to_regprocedure('public.resume_exact_linen_formula_job(text)')),'\s+','','g') ilike '%2e0ef127-73cb-5bc6-8707-2d6305719e8c%37905936-ba71-5ea7-b0b9-72c3856527a7%status=''completed''%notexists%review_status=''approved''%',false),
+    'only the confirmed false-completed linen job can return to evidence_ready'
+
   union all select 'security','all styling research tables have RLS enabled',
     not exists (
       select 1 from (values
@@ -319,7 +354,13 @@ with checks(phase,check_name,passed,details) as (
         ('public.claim_next_trend_style_research_job(text)'),
         ('public.claim_next_image_generation_job_with_quota_policy(text,text,boolean,text,integer)'),
         ('public.defer_trend_style_research_job_quota(uuid,integer,timestamptz,text)'),
-        ('public.recover_trend_style_research_job_attempt(uuid,uuid,integer,text)')
+        ('public.recover_trend_style_research_job_attempt(uuid,uuid,integer,text)'),
+        ('public.mark_trend_style_research_evidence_ready(uuid,integer,text[],text[],jsonb,text)'),
+        ('public.begin_trend_style_formula_generation(uuid)'),
+        ('public.defer_trend_style_formula_quota(uuid,timestamptz,text)'),
+        ('public.return_trend_style_formula_to_evidence_ready(uuid,text)'),
+        ('public.approve_trend_formula_set_and_complete_job(uuid,uuid)'),
+        ('public.resume_exact_linen_formula_job(text)')
       ) expected(signature)
       left join pg_proc p on p.oid=to_regprocedure(expected.signature)
       where p.oid is null or not p.prosecdef or not coalesce(p.proconfig,'{}') @> array['search_path=public']
@@ -333,7 +374,13 @@ with checks(phase,check_name,passed,details) as (
         ('public.claim_next_trend_style_research_job(text)'),
         ('public.claim_next_image_generation_job_with_quota_policy(text,text,boolean,text,integer)'),
         ('public.defer_trend_style_research_job_quota(uuid,integer,timestamptz,text)'),
-        ('public.recover_trend_style_research_job_attempt(uuid,uuid,integer,text)')
+        ('public.recover_trend_style_research_job_attempt(uuid,uuid,integer,text)'),
+        ('public.mark_trend_style_research_evidence_ready(uuid,integer,text[],text[],jsonb,text)'),
+        ('public.begin_trend_style_formula_generation(uuid)'),
+        ('public.defer_trend_style_formula_quota(uuid,timestamptz,text)'),
+        ('public.return_trend_style_formula_to_evidence_ready(uuid,text)'),
+        ('public.approve_trend_formula_set_and_complete_job(uuid,uuid)'),
+        ('public.resume_exact_linen_formula_job(text)')
       ) expected(signature)
       where to_regprocedure(expected.signature) is null
          or not coalesce(has_function_privilege('service_role',to_regprocedure(expected.signature),'EXECUTE'),false)

@@ -48,7 +48,7 @@ test("market discovery parser rejects missing or duplicate configured markets",(
 test("rate-limited market discovery atomically defers without consuming an attempt",async()=>{
   const job:ResearchJob={id:"job",concept_id:"concept",canonical_keyword:"linen",requesting_market:"IN",season:"summer",attempts:2,max_attempts:3};
   let retryAfter:string|null|undefined;let searches=0;let providerCalls=0;let attempts=job.attempts;let ordinaryRetries=0;
-  const store:ResearchStore={async claim(){return job},async saveMarketEvidence(){},async insertEvidence(){throw new Error("unexpected evidence insert")},async complete(){throw new Error("unexpected completion")},async retry(){ordinaryRetries++},async deferQuota(_job,error){retryAfter=error.retryAfter;attempts-=1}};
+  const store:ResearchStore={async claim(){return job},async saveMarketEvidence(){},async insertEvidence(){throw new Error("unexpected evidence insert")},async checkpointEvidence(){throw new Error("unexpected completion")},async retry(){ordinaryRetries++},async deferQuota(_job,error){retryAfter=error.retryAfter;attempts-=1}};
   const batch:any=mockedBatch();batch.markets=batch.markets.map((market:any)=>({...market,normalizedInterest:0,recentMomentum:0,confidence:0,observationCompleteness:0,failureReason:"google_trends_rate_limited",retryInformation:{attempts:3,maxAttempts:3,rateLimited:true,retryAfterSeconds:120,nextRetryAt:"2026-07-20T00:02:00Z"}}));
   const result=await runResearchWorker({workerId:"test",store,interestProvider:{async discover(){providerCalls++;return parseRepoMarketDiscoveryBatch(batch,"linen")}},searchProvider:{async search(){searches++;return[]}},now:new Date("2026-07-20T00:00:00Z"),authoritativeMarketPlanLoader:async()=>null});
   assert.equal(result.status,"deferred");

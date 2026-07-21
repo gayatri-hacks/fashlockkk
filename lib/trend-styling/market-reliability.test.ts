@@ -65,9 +65,9 @@ test("fresh authoritative canonical-keyword scores are read-only and support exa
 test("authoritative market scores bypass cached evidence and pytrends",async()=>{
   const researchJob=job();let pytrendsCalls=0;let cacheReads=0;let completed=false;
   const plan=selectStylingResearchMarkets({lifecycle:"RISING",requestingMarket:"BR",signals:MARKETS.map((region,index)=>({region,regionalMomentum:80-index*2,confidence:.9,dataFreshness:1,observationCount:12,currentInterestPercentile:95-index*2}))});
-  const store:ResearchStore={async claim(){return researchJob},async loadMarketEvidence(){cacheReads++;return discoveryBatch()},async saveMarketEvidence(){throw new Error("live evidence must not be saved")},async insertEvidence(){},async complete(){completed=true},async retry(){throw new Error("unexpected retry")}};
+  const store:ResearchStore={async claim(){return researchJob},async loadMarketEvidence(){cacheReads++;return discoveryBatch()},async saveMarketEvidence(){throw new Error("live evidence must not be saved")},async insertEvidence(){},async checkpointEvidence(){completed=true},async retry(){throw new Error("unexpected retry")}};
   const result=await runResearchWorker({workerId:"test",store,interestProvider:{async discover(){pytrendsCalls++;return discoveryBatch()}},searchProvider:evidenceProvider(),now:NOW,authoritativeMarketPlanLoader:async(keyword)=>{assert.equal(keyword,"linen");return plan}});
-  assert.equal(result.status,"completed");
+  assert.equal(result.status,"evidence_ready");
   assert.equal(result.marketSource,"authoritative_scores");
   assert.equal(pytrendsCalls,0);
   assert.equal(cacheReads,0);
@@ -78,9 +78,9 @@ test("authoritative market scores bypass cached evidence and pytrends",async()=>
 
 test("last-known-good market evidence bypasses live pytrends when authority is unavailable",async()=>{
   let pytrendsCalls=0;
-  const store:ResearchStore={async claim(){return job()},async loadMarketEvidence(){return discoveryBatch()},async saveMarketEvidence(){throw new Error("unexpected live save")},async insertEvidence(){},async complete(){},async retry(){throw new Error("unexpected retry")}};
+  const store:ResearchStore={async claim(){return job()},async loadMarketEvidence(){return discoveryBatch()},async saveMarketEvidence(){throw new Error("unexpected live save")},async insertEvidence(){},async checkpointEvidence(){},async retry(){throw new Error("unexpected retry")}};
   const result=await runResearchWorker({workerId:"test",store,interestProvider:{async discover(){pytrendsCalls++;return discoveryBatch()}},searchProvider:evidenceProvider(),now:NOW,authoritativeMarketPlanLoader:async()=>null});
-  assert.equal(result.status,"completed");
+  assert.equal(result.status,"evidence_ready");
   assert.equal(result.marketSource,"last_known_good_market_evidence");
   assert.equal(pytrendsCalls,0);
 });

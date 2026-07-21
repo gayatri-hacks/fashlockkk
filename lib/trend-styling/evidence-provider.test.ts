@@ -189,7 +189,7 @@ test("Serper credit exhaustion defers the exact job, releases its claim attempt 
     async claim() { return job; },
     async loadMarketEvidence() { return batch; },
     async insertEvidence() { evidenceWrites += 1; },
-    async complete() { researchCompletions += 1; },
+    async checkpointEvidence() { researchCompletions += 1; },
     async retry() { retryCalls += 1; },
     async deferQuota(claimedJob, deferral) {
       assert.equal(claimedJob.id, job.id);

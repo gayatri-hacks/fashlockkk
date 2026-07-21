@@ -4,7 +4,7 @@ import { buildSixFormulaImageJobs } from "./isolated-image-jobs";
 import { validateFormula, validateSixFormulaBatch } from "./validation";
 
 export const MANUAL_STYLING_WORKFLOW_NAME="manual-trend-styling-research";
-export const MANUAL_STYLING_STAGES=["market_discovery","styling_research","evidence_validation","six_formula_generation","formula_validation","atomic_approval","optional_image_enqueue"] as const;
+export const MANUAL_STYLING_STAGES=["market_discovery","styling_research","evidence_ready","formula_generating","formula_validation","atomic_approval_and_completion","optional_image_enqueue"] as const;
 export async function runManualFirstStylingWorkflow(input:{enabled:boolean;autoEnqueueImages:boolean;research:()=>Promise<{evidence:EvidenceInsert[]}>;generate:(evidence:EvidenceInsert[])=>Promise<TrendOutfitFormula[]>;approve:(formulas:TrendOutfitFormula[])=>Promise<TrendOutfitFormula[]>;enqueue?:(jobs:ReturnType<typeof buildSixFormulaImageJobs>)=>Promise<void>}){
   if(!input.enabled)return {status:"disabled" as const,stages:MANUAL_STYLING_STAGES};
   const research=await input.research();if(new Set(research.evidence.map((item)=>item.source_domain)).size<2)return {status:"insufficient_evidence" as const};
