@@ -3,6 +3,7 @@ import type { ResearchMarketSource } from "./research-worker";
 const SAFE_STATUSES = new Set(["idle", "completed", "retryable", "deferred"]);
 const SAFE_CATEGORIES = new Set([
   "google_trends_quota_or_rate_limit",
+  "quota_exhausted",
   "insufficient_market_evidence",
   "research_retryable",
   "none",

@@ -2,7 +2,11 @@ import { createHash } from "crypto";
 import { SUPPORTED_TREND_REGIONS } from "@/lib/trends/config";
 import { getSupabaseClient } from "@/lib/supabase";
 import { deduplicateStylingSources } from "./evidence-deduplication";
-import type { PublicEvidenceResult, StylingEvidenceSearchProvider } from "./evidence-provider";
+import {
+  EvidenceProviderQuotaError,
+  type PublicEvidenceResult,
+  type StylingEvidenceSearchProvider,
+} from "./evidence-provider";
 import { MARKET_RESEARCH_LANGUAGES, selectStylingResearchMarkets, type StylingMarketPlan, type StylingMarketSignal } from "./market-selection";
 import { isolatedConceptId } from "./concept-identity";
 import { loadAuthoritativeMarketPlan } from "./market-authority";
@@ -32,6 +36,12 @@ export type ResearchMarketSource = "none" | "authoritative_scores" | "last_known
 export type ResearchJob = { id: string; concept_id: string; canonical_keyword: string; requesting_market: string; season: string; attempts: number; max_attempts: number };
 export type EvidenceInsert = { id:string; concept_id: string; canonical_keyword: string; audience: "women"|"men"; region: string; season: string; garment_pairings: string[]; silhouettes: string[]; materials: string[]; colours: string[]; footwear: string[]; accessories: string[]; styling_techniques: string[]; source_url: string; source_domain: string; source_language: string; short_extract: string; published_at: string; observed_at: string; quality_score: number; recency_score: number; market_relevance_score: number; content_fingerprint: string };
 
+export type ResearchQuotaDeferral = {
+  errorCategory: "google_trends_quota_or_rate_limit" | "quota_exhausted";
+  retryAfter: string;
+  message: string;
+};
+
 export interface ResearchStore {
   claim(workerId: string): Promise<ResearchJob|null>;
   loadMarketEvidence?(job:ResearchJob,now:Date):Promise<MarketDiscoveryBatch|null>;
@@ -39,7 +49,7 @@ export interface ResearchStore {
   insertEvidence(rows: EvidenceInsert[]): Promise<void>;
   complete(job: ResearchJob, data: { selectedMarkets: string[]; evaluatedMarkets: string[]; selectedReasons:Record<string,string[]>; evidenceHash: string }): Promise<void>;
   retry(job: ResearchJob, error: string, retryAfter?:string|null): Promise<void>;
-  deferQuota?(job: ResearchJob, error: GoogleTrendsQuotaDeferralError): Promise<void>;
+  deferQuota?(job: ResearchJob, error: ResearchQuotaDeferral): Promise<void>;
 }
 
 class InsufficientMarketDiscoveryError extends Error {
@@ -51,6 +61,20 @@ export function nextMarketDiscoveryRetry(batch:MarketDiscoveryBatch,now:Date){
   const candidates=batch.markets.map((market)=>market.retryInformation.nextRetryAt).filter((value):value is string=>Boolean(value)).map((value)=>new Date(value).getTime()).filter((value)=>Number.isFinite(value)&&value>now.getTime());
   const target=candidates.length?Math.min(...candidates):now.getTime()+6*3600000;
   return new Date(Math.max(now.getTime()+5*60000,Math.min(now.getTime()+24*3600000,target))).toISOString();
+}
+
+export function evidenceProviderQuotaRetryAt(error: EvidenceProviderQuotaError, claimedAttempts: number, now: Date) {
+  const minimumSeconds = 6 * 60 * 60;
+  const maximumSeconds = 24 * 60 * 60;
+  const attemptBackoffSeconds = minimumSeconds * 2 ** Math.min(2, Math.max(0, claimedAttempts - 1));
+  const requestedSeconds = Number.isFinite(error.retryAfterSeconds)
+    ? Number(error.retryAfterSeconds)
+    : minimumSeconds;
+  const boundedSeconds = Math.min(
+    maximumSeconds,
+    Math.max(minimumSeconds, requestedSeconds, attemptBackoffSeconds),
+  );
+  return new Date(now.getTime() + boundedSeconds * 1_000).toISOString();
 }
 
 const VOCAB = { garments: ["shirt","blouse","t-shirt","tee","jeans","trousers","skirt","dress","blazer","jacket","kurta","saree","shorts","waistcoat"], silhouettes: ["oversized","fitted","wide leg","barrel","cropped","relaxed","tailored","flared","straight leg"], materials: ["linen","cotton","denim","silk","satin","leather","suede","knit","crochet","wool"], colours: ["white","black","blue","indigo","cream","beige","brown","red","green","yellow","pink","navy"], footwear: ["loafers","sneakers","sandals","boots","heels","flats","mules"], accessories: ["belt","bag","scarf","necklace","earrings","watch","cap"], techniques: ["tucked","layered","belted","tonal","colour blocking","rolled sleeves","open shirt","high waist"] } as const;
@@ -79,6 +103,7 @@ function safeErrorMessage(error: unknown) {
 
 function errorCategory(error: unknown) {
   if (error instanceof GoogleTrendsQuotaDeferralError) return error.errorCategory;
+  if (error instanceof EvidenceProviderQuotaError) return error.errorCategory;
   if (error instanceof InsufficientMarketDiscoveryError) return error.errorCategory;
   return "research_retryable" as const;
 }
@@ -143,6 +168,12 @@ export async function runResearchWorker(input: {
     return {status:"completed" as const,job,evidence:unique,marketPlan:plan,marketDiscovery:discovery,marketSource};
   } catch(error){
     const message=safeErrorMessage(error);
+    if (error instanceof EvidenceProviderQuotaError) {
+      if (!input.store.deferQuota) throw new Error("Research store does not support quota-safe deferral");
+      const retryAfter=evidenceProviderQuotaRetryAt(error,job.attempts,now);
+      await input.store.deferQuota(job,{errorCategory:error.errorCategory,retryAfter,message});
+      return {status:"deferred" as const,job,error:message,errorCategory:error.errorCategory,retryAfter,marketSource};
+    }
     if (error instanceof GoogleTrendsQuotaDeferralError) {
       if (!input.store.deferQuota) throw new Error("Research store does not support quota-safe deferral");
       await input.store.deferQuota(job,error);

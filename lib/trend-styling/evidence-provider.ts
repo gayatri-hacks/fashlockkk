@@ -23,6 +23,7 @@ export interface StylingEvidenceSearchProvider {
 
 export const SERPER_REQUEST_RESULT_COUNT = 10;
 export const SERPER_USABLE_RESULT_LIMIT = 6;
+export const SERPER_CREDIT_EXHAUSTION_RETRY_SECONDS = 12 * 60 * 60;
 const PROVIDER_ERROR_BODY_LIMIT_BYTES = 2_048;
 const PROVIDER_REASON_LIMIT = 240;
 
@@ -57,6 +58,7 @@ const LOCAL_QUERY_TERMS: Record<string, { women: string; men: string; phrase: st
 export type SerperFailureKind =
   | "invalid_request"
   | "credential_problem"
+  | "quota_exhausted"
   | "quota_or_rate_limit"
   | "temporary_provider_failure"
   | "provider_failure";
@@ -73,6 +75,21 @@ export class SerperEvidenceSearchError extends Error {
     const retry = retryAfterSeconds ? `; retry_after=${retryAfterSeconds}s` : "";
     super(`Evidence search ${kind} (${status}${code}${retry}): ${providerReason}`);
     this.name = "SerperEvidenceSearchError";
+  }
+}
+
+export class EvidenceProviderQuotaError extends SerperEvidenceSearchError {
+  readonly errorCategory = "quota_exhausted" as const;
+  readonly provider = "serper" as const;
+
+  constructor(
+    status: number,
+    providerCode: string | null,
+    providerReason: string,
+    retryAfterSeconds = SERPER_CREDIT_EXHAUSTION_RETRY_SECONDS,
+  ) {
+    super("quota_exhausted", status, providerCode, providerReason, retryAfterSeconds);
+    this.name = "EvidenceProviderQuotaError";
   }
 }
 
@@ -202,11 +219,12 @@ function extractProviderDiagnostic(text: string, apiKey: string) {
     || nested?.reason;
   const codeValue = parsed?.code || nested?.code || nested?.status;
   const retryValue = parsed?.retryAfterSeconds || parsed?.retry_after || nested?.retryAfterSeconds || nested?.retry_after;
+  const boundedCreditReason = /\bnot enough credits\b/i.exec(text)?.[0] || null;
   const plainTextReason = !reasonValue && text.trim() && !/^[{[]/.test(text.trim())
     ? text.trim().split(/\r?\n/, 1)[0]
     : null;
   return {
-    reason: sanitizeProviderValue(reasonValue || plainTextReason || "provider returned no safe diagnostic", apiKey, PROVIDER_REASON_LIMIT),
+    reason: sanitizeProviderValue(reasonValue || boundedCreditReason || plainTextReason || "provider returned no safe diagnostic", apiKey, PROVIDER_REASON_LIMIT),
     code: codeValue ? sanitizeProviderValue(codeValue, apiKey, 64) : null,
     retryAfterSeconds: Number.isFinite(Number(retryValue)) ? Math.max(1, Math.min(86_400, Number(retryValue))) : null,
   };
@@ -224,6 +242,15 @@ function retryAfterHeaderSeconds(value: string | null, now = new Date()) {
 async function serperHttpError(response: Response, apiKey: string) {
   const diagnostic = extractProviderDiagnostic(await readBoundedResponseText(response), apiKey);
   const status = response.status;
+  const creditExhausted = /\bnot enough credits\b/i.test(`${diagnostic.code || ""} ${diagnostic.reason}`);
+  if (status === 400 && creditExhausted) {
+    return new EvidenceProviderQuotaError(
+      status,
+      diagnostic.code,
+      diagnostic.reason,
+      diagnostic.retryAfterSeconds || SERPER_CREDIT_EXHAUSTION_RETRY_SECONDS,
+    );
+  }
   if (status === 400) return new SerperEvidenceSearchError("invalid_request", status, diagnostic.code, diagnostic.reason, null);
   if (status === 401 || status === 403) return new SerperEvidenceSearchError("credential_problem", status, diagnostic.code, diagnostic.reason, 3_600);
   if (status === 429) {
