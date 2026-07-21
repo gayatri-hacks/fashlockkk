@@ -77,7 +77,18 @@ async function main() {
   }
 
   if (!job?.evidence_hash) throw new Error("Evidence-ready job is missing its evidence hash");
-  const formulaJob = { id: job.id, concept_id: job.concept_id, attempts: job.attempts, max_attempts: job.max_attempts, evidence_hash: job.evidence_hash };
+  const setId = isolatedConceptId(`formula checkpoint ${job.id} ${job.evidence_hash}`);
+  const formulaJob = {
+    id: job.id,
+    concept_id: job.concept_id,
+    attempts: job.attempts,
+    max_attempts: job.max_attempts,
+    evidence_hash: job.evidence_hash,
+    set_id: setId,
+    canonical_keyword: job.canonical_keyword,
+    requesting_market: job.requesting_market,
+    selected_markets: marketPlan.researchMarkets,
+  };
   const prompt = buildEvidenceGroundedFormulaPrompt({
     conceptId: job.concept_id,
     canonicalKeyword: job.canonical_keyword,
@@ -87,7 +98,6 @@ async function main() {
     evidence,
     evidenceHash: job.evidence_hash,
   });
-  const setId = isolatedConceptId(`formula checkpoint ${job.id} ${job.evidence_hash}`);
   const store: FormulaStateStore = {
     async begin(current) {
       const { data, error } = await db.rpc("begin_trend_style_formula_generation", { target_job_id: current.id });

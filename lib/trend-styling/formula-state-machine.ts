@@ -2,6 +2,7 @@ import type { FormulaTextProvider } from "./providers";
 import { FormulaProviderQuotaError } from "./providers";
 import type { TrendOutfitFormula, TrendStyleEvidence } from "./schema";
 import { validateFormula, validateSixFormulaBatch } from "./validation";
+import { materializeTrustedFormulaSet } from "./formula-schema-boundary";
 
 export type FormulaReadyJob = {
   id: string;
@@ -9,6 +10,10 @@ export type FormulaReadyJob = {
   attempts: number;
   max_attempts: number;
   evidence_hash: string;
+  set_id: string;
+  canonical_keyword: string;
+  requesting_market: string;
+  selected_markets: string[];
 };
 
 export interface FormulaStateStore {
@@ -35,11 +40,30 @@ export async function runFormulaStateMachine(input: {
 }) {
   if (!(await input.store.begin(input.job))) return { status: "not_ready" as const };
   try {
-    const formulas = await input.provider.generate({ prompt: input.prompt });
+    const generatedAt = (input.now || new Date()).toISOString();
+    const validUntil = new Date(new Date(generatedAt).getTime() + 90 * 86_400_000).toISOString();
+    const providerOutput = await input.provider.generate({ prompt: input.prompt });
+    const formulas = materializeTrustedFormulaSet(providerOutput, {
+      jobId: input.job.id,
+      setId: input.job.set_id,
+      conceptId: input.job.concept_id,
+      canonicalKeyword: input.job.canonical_keyword,
+      requestingMarket: input.job.requesting_market,
+      selectedMarkets: input.job.selected_markets,
+      authoritativeEvidenceHash: input.job.evidence_hash,
+      generatedAt,
+      validUntil,
+    });
     const batch = validateSixFormulaBatch(formulas);
+    const authoritativeEvidenceIds = new Set(input.evidence
+      .filter((item) => item.concept_id === input.job.concept_id)
+      .map((item) => item.id));
     for (const formula of formulas) {
       if (formula.concept_id !== input.job.concept_id) batch.errors.push("Formula owner does not match checkpoint concept");
       if (formula.evidence_hash !== input.job.evidence_hash) batch.errors.push("Formula evidence hash does not match checkpoint");
+      if (new Set(formula.evidence_ids).size !== formula.evidence_ids.length) batch.errors.push(`${formula.audience}/${formula.formula_slot} contains duplicated evidence IDs`);
+      const unknownEvidenceIds = formula.evidence_ids.filter((id) => !authoritativeEvidenceIds.has(id));
+      if (unknownEvidenceIds.length) batch.errors.push(`${formula.audience}/${formula.formula_slot} cites evidence outside the saved authoritative set`);
       batch.errors.push(...validateFormula(formula, input.evidence, input.now).errors);
     }
     if (batch.errors.length) {
@@ -47,7 +71,7 @@ export async function runFormulaStateMachine(input: {
       return { status: "invalid_formulas" as const, errors: batch.errors };
     }
     const approved = await input.store.approveAndComplete(input.job, formulas);
-    if (approved.length !== 6) throw new Error("Completed job must read back exactly six approved formulas");
+    if (approved.length !== 6 || approved.some((formula) => formula.review_status !== "approved")) throw new Error("Completed job must read back exactly six approved formulas");
     if (input.enqueueImages && input.store.enqueue) await input.store.enqueue(approved);
     return { status: "completed" as const, formulas: approved };
   } catch (error) {

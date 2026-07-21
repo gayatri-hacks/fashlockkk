@@ -16,6 +16,63 @@ export const formulaItemSchema = z.object({
   styling_instruction: preciseText,
 }).strict();
 
+export const providerFormulaCreativeSchema = z.object({
+  title: preciseText,
+  items: z.array(formulaItemSchema).min(2).max(10),
+  footwear: preciseText,
+  accessories: z.array(preciseText).min(1).max(8),
+  styling_instructions: z.array(preciseText).min(1).max(8),
+  occasion: preciseText,
+  season: preciseText,
+  climate: preciseText,
+  market_rationale: z.string().trim().min(30).max(700),
+  evidence_based_rationale: z.string().trim().min(30).max(700),
+  evidence_ids: z.array(z.string().uuid()).min(2).max(30),
+  confidence: z.number().min(0).max(1),
+}).strict();
+
+export const providerFormulaSchema = providerFormulaCreativeSchema.extend({
+  audience: z.enum(AUDIENCES),
+  formula_slot: z.enum(FORMULA_SLOTS),
+}).strict();
+
+const providerAudienceFormulaSetSchema = z.object({
+  easy_entry: providerFormulaCreativeSchema,
+  current_uniform: providerFormulaCreativeSchema,
+  editorial_push: providerFormulaCreativeSchema,
+}).strict();
+
+export const providerFormulaOutputSchema = z.object({
+  formulas: z.object({ women: providerAudienceFormulaSetSchema, men: providerAudienceFormulaSetSchema }).strict(),
+}).strict().transform(({ formulas }) => ({
+  formulas: AUDIENCES.flatMap((audience) => FORMULA_SLOTS.map((formula_slot) => providerFormulaSchema.parse({
+    ...formulas[audience][formula_slot], audience, formula_slot,
+  }))),
+}));
+
+export type ProviderFormula = z.infer<typeof providerFormulaSchema>;
+export type ProviderFormulaOutput = z.infer<typeof providerFormulaOutputSchema>;
+
+export const internalFormulaCandidateSchema = providerFormulaSchema.extend({
+  id: z.string().uuid(),
+  set_id: z.string().uuid(),
+  trend_id: z.number().int().nullable(),
+  concept_id: z.string().uuid().nullable(),
+  job_id: z.string().uuid(),
+  owner_identity: preciseText,
+  canonical_keyword: preciseText,
+  requesting_market: preciseText,
+  selected_markets: z.array(preciseText).min(1),
+  authoritative_evidence_hash: z.string().regex(/^[a-f0-9]{64}$/),
+  formula_type: z.literal("trend_outfit"),
+  review_status: z.literal("pending_review"),
+  generated_at: z.string().datetime(),
+  valid_until: z.string().datetime(),
+  schema_version: z.literal(1),
+}).strict().refine((value) => Boolean(value.trend_id) !== Boolean(value.concept_id), "Exactly one trend_id or concept_id is required");
+
+export type InternalFormulaCandidate = z.infer<typeof internalFormulaCandidateSchema>;
+
 export const trendOutfitFormulaSchema = z.object({
   id: z.string().uuid().optional(),
   trend_id: z.number().int().nullable().optional(),
@@ -88,6 +145,10 @@ export function computeEvidenceHash(evidence: TrendStyleEvidence[]) {
   return stableHash(evidence.map(({ id, audience, region, season, source_url, published_at, observed_at, garment_pairings, silhouettes, materials, colours, footwear, accessories, styling_techniques, quality_score, recency_score }) => ({ id, audience, region, season, source_url, published_at, observed_at, garment_pairings, silhouettes, materials, colours, footwear, accessories, styling_techniques, quality_score, recency_score })).sort((a, b) => a.id.localeCompare(b.id)));
 }
 
-export function computeFormulaHash(formula: Omit<TrendOutfitFormula, "formula_hash" | "id" | "image_url" | "image_status">) {
-  return stableHash(formula);
+export function computeFormulaHash(formula: Omit<TrendOutfitFormula, "formula_hash">) {
+  const hashable = { ...formula };
+  delete hashable.id;
+  delete hashable.image_url;
+  delete hashable.image_status;
+  return stableHash(hashable);
 }
