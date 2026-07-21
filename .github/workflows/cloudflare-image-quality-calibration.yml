@@ -6,7 +6,7 @@ on:
       keywords:
         description: Comma-separated safe keyword subset for manual calibration.
         required: false
-        default: oversized,layering,kurta
+        default: oversized,layering
 
 permissions:
   contents: read
@@ -28,7 +28,7 @@ jobs:
       IMAGE_OCR_PROVIDER: ${{ vars.IMAGE_OCR_PROVIDER }}
       IMAGE_SEMANTIC_VALIDATOR_FALLBACK_PROVIDER: disabled
       CALIBRATION_KEYWORDS: ${{ inputs.keywords }}
-      CALIBRATION_MAX_TEMPORARY_IMAGES: 3
+      CALIBRATION_MAX_TEMPORARY_IMAGES: 2
       CALIBRATION_OUTPUT_DIR: .tmp/cloudflare-image-quality-calibration
 
     steps:

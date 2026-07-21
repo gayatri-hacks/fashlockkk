@@ -47,6 +47,7 @@ export type TrendConceptCandidateFacts = {
   defectLogoOrWatermarkDetected?: boolean;
   materialContradictsBrief?: boolean;
   repeatedCatalogComposition?: boolean;
+  fusedHybridGarmentDetected?: boolean;
   defectRejectionReasons?: string[];
   defectDetectedMaterial?: string;
   defectCompositionDescription?: string;
@@ -159,6 +160,7 @@ export function validateTrendConceptCandidate({
   if (facts.materialRealism < thresholds.materialRealism) reasons.push(`materialRealism ${facts.materialRealism.toFixed(2)} below ${thresholds.materialRealism}`);
   if (facts.compositionQuality < thresholds.compositionQuality) reasons.push(`compositionQuality ${facts.compositionQuality.toFixed(2)} below ${thresholds.compositionQuality}`);
   if (facts.semanticConfidence < thresholds.semanticConfidence) reasons.push(`semantic confidence ${facts.semanticConfidence.toFixed(2)} below ${thresholds.semanticConfidence}`);
+  if (facts.defectReviewAvailable === false) reasons.push("independent defect review unavailable or incomplete");
   if (facts.defectReviewAvailable && (facts.defectConfidence ?? 0) < thresholds.defectConfidence) {
     reasons.push(`defect confidence ${(facts.defectConfidence ?? 0).toFixed(2)} below ${thresholds.defectConfidence}`);
   }
@@ -183,6 +185,7 @@ export function validateTrendConceptCandidate({
   if (facts.defectLogoOrWatermarkDetected) reasons.push("defect review detected logo or watermark");
   if (facts.materialContradictsBrief) reasons.push("defect review detected material mismatch");
   if (facts.repeatedCatalogComposition) reasons.push("defect review detected repeated centered product-catalog composition");
+  if (facts.fusedHybridGarmentDetected) reasons.push("defect review detected fused or impossible hybrid garment construction");
   if (facts.defectRejectionReasons?.length) reasons.push(`defect review: ${facts.defectRejectionReasons.join(", ")}`);
   if (facts.missingRequiredCues.length) reasons.push(`missing required cues: ${facts.missingRequiredCues.join(", ")}`);
 
@@ -278,6 +281,7 @@ export function candidateFactsFromAnalysis({
     defectLogoOrWatermarkDetected: defect?.logoOrWatermarkDetected,
     materialContradictsBrief: defect?.materialContradictsBrief,
     repeatedCatalogComposition: defect?.repeatedCatalogComposition,
+    fusedHybridGarmentDetected: defect?.fusedHybridGarmentDetected,
     defectRejectionReasons: defect?.rejectionReasons,
     defectDetectedMaterial: defect?.detectedMaterial,
     defectCompositionDescription: defect?.compositionDescription,

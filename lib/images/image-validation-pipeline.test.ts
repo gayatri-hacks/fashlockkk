@@ -60,6 +60,7 @@ function validProviderDefectPayload(overrides: Record<string, unknown> = {}) {
     logoOrWatermarkDetected: false,
     materialContradictsBrief: false,
     repeatedCatalogComposition: false,
+    fusedHybridGarmentDetected: false,
     detectedMaterial: "genuine leather",
     subjectDescription: "a fashion material detail",
     materialDescription: "realistic material grain and stitching",
@@ -373,7 +374,7 @@ test("Cloudflare semantic validator treats quota as retryable", async () => {
   }
 });
 
-test("Cloudflare defect validator accepts strict JSON and sends crop-sheet image payload", async () => {
+test("Cloudflare defect validator accepts complete strict JSON from the full-image review", async () => {
   const sharp = (await import("sharp")).default;
   const imageBuffer = await sharp({
     create: {
@@ -404,9 +405,11 @@ test("Cloudflare defect validator accepts strict JSON and sends crop-sheet image
 
     assert.equal(result.available, true);
     assert.equal(result.passed, true);
+    assert.equal(result.reviewAttempts, 1);
     assert.equal(requestPayload.image.startsWith("data:image/jpeg;base64,"), true);
-    assert.match(requestPayload.messages[1].content, /crop sheet/);
+    assert.match(requestPayload.messages[1].content, /full generated trend card image/);
     assert.match(requestPayload.messages[1].content, /collar label/);
+    assert.match(requestPayload.messages[1].content, /independently of OCR/);
     assert.ok(requestPayload.guided_json);
   } finally {
     globalThis.fetch = originalFetch;
@@ -441,6 +444,7 @@ test("defect review failures block publication even with strong semantic scores"
     logoOrWatermarkDetected: false,
     materialContradictsBrief: true,
     repeatedCatalogComposition: true,
+    fusedHybridGarmentDetected: false,
     detectedMaterial: "denim/chambray",
     subjectDescription: "centered oversized shirt",
     materialDescription: "denim-like twill",
@@ -451,6 +455,8 @@ test("defect review failures block publication even with strong semantic scores"
     labelForensicsPassed: false,
     labelForensicsUncertain: true,
     labelForensicsReasons: ["possible white sewn-in tag with dark/red glyph detail in neckline crop"],
+    reviewAttempts: 1,
+    incompleteEvidenceFields: [],
     provider: "stub",
   };
   const facts = candidateFactsFromAnalysis({ brief, pixel, semantic, defect, candidateIndex: 0 });
@@ -462,7 +468,7 @@ test("defect review failures block publication even with strong semantic scores"
   assert.ok(result.rejectionReasons.some((reason) => reason.includes("centered product-catalog")));
 });
 
-test("defect review fails closed for zero confidence and empty evidence descriptions", async () => {
+test("incomplete high-confidence defect responses retry once then fail closed", async () => {
   const sharp = (await import("sharp")).default;
   const imageBuffer = await sharp({
     create: {
@@ -474,6 +480,7 @@ test("defect review fails closed for zero confidence and empty evidence descript
   }).jpeg().toBuffer();
   const pixel = await analyzeImagePixels(imageBuffer, { ocrProvider: noTextOcr });
   const originalFetch = globalThis.fetch;
+  let calls = 0;
   globalThis.fetch = (async () => new Response(JSON.stringify({
     result: {
       response: validProviderDefectPayload({
@@ -488,10 +495,15 @@ test("defect review fails closed for zero confidence and empty evidence descript
         compositionDescription: "",
         tagRegionDescription: "",
         rejectionReasons: [],
-        confidence: 0,
+        confidence: 1,
       }),
     },
   }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  const incompleteFetch = globalThis.fetch;
+  globalThis.fetch = (async (...arguments_: Parameters<typeof fetch>) => {
+    calls += 1;
+    return incompleteFetch(...arguments_);
+  }) as typeof fetch;
 
   try {
     const validator = createImageDefectValidator({
@@ -502,11 +514,144 @@ test("defect review fails closed for zero confidence and empty evidence descript
     } as unknown as NodeJS.ProcessEnv);
     const defect = await validator.validate({ brief: buildTrendImageBrief("oversized"), imageBuffer, pixel, candidateIndex: 0 });
 
+    assert.equal(calls, 2);
+    assert.equal(defect.available, false);
+    assert.equal(defect.passed, false);
+    assert.equal(defect.confidence, 0);
+    assert.equal(defect.reviewAttempts, 2);
+    assert.equal(defect.error, "defect_validator_incomplete_response");
+    assert.ok(defect.incompleteEvidenceFields.includes("subjectDescription"));
+    assert.deepEqual(defect.rejectionReasons, ["defect_validator_incomplete_response"]);
+    const brief=buildTrendImageBrief("oversized");
+    const semantic=validSemanticPayload({requiredCuesPresent:true}) as any;
+    const publication=validateTrendConceptCandidate({brief,facts:candidateFactsFromAnalysis({brief,pixel,semantic,defect,candidateIndex:0})});
+    assert.equal(publication.passed,false);
+    assert.ok(publication.rejectionReasons.some((reason)=>reason.includes("unavailable or incomplete")));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("one bounded defect-review retry uses full image plus enlarged collar and tag crops", async () => {
+  const sharp = (await import("sharp")).default;
+  const imageBuffer = await sharp({
+    create: { width: 1024, height: 1280, channels: 3, background: "#8795a3" },
+  }).jpeg().toBuffer();
+  const pixel = await analyzeImagePixels(imageBuffer, { ocrProvider: noTextOcr });
+  const incomplete = validProviderDefectPayload({
+    detectedMaterial: "",
+    subjectDescription: "",
+    materialDescription: "",
+    compositionDescription: "",
+    tagRegionDescription: "",
+    confidence: 1,
+  });
+  const payloads: any[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    payloads.push(JSON.parse(String(init?.body || "{}")));
+    const response = payloads.length === 1 ? incomplete : validProviderDefectPayload();
+    return new Response(JSON.stringify({ result: { response } }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    const validator = createImageDefectValidator({
+      IMAGE_DEFECT_VALIDATOR_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      CLOUDFLARE_VISION_MODEL: "@cf/meta/llama-vision",
+    } as unknown as NodeJS.ProcessEnv);
+    const defect = await validator.validate({ brief: buildTrendImageBrief("oversized"), imageBuffer, pixel, candidateIndex: 0 });
+
+    assert.equal(payloads.length, 2);
+    assert.equal(defect.available, true);
+    assert.equal(defect.passed, true);
+    assert.equal(defect.reviewAttempts, 2);
+    assert.match(payloads[0].messages[1].content, /full generated trend card image/);
+    assert.match(payloads[1].messages[1].content, /one allowed retry/);
+    assert.match(payloads[1].messages[1].content, /enlarged neckline/);
+    assert.notEqual(payloads[0].image, payloads[1].image);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("visible collar label is rejected visually even when OCR misses it", async () => {
+  const sharp = (await import("sharp")).default;
+  const imageBuffer = await sharp({
+    create: { width: 1024, height: 1280, channels: 3, background: "#a5b2bf" },
+  }).jpeg().toBuffer();
+  const pixel = await analyzeImagePixels(imageBuffer, { ocrProvider: noTextOcr });
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({
+      result: { response: validProviderDefectPayload({
+        visibleLabelDetected: true,
+        imitationWritingDetected: true,
+        subjectDescription: "off-centre oversized shirt",
+        tagRegionDescription: "a sewn rectangular collar label with fake letter-like marks is visible",
+        rejectionReasons: ["visible sewn collar label despite OCR miss"],
+      }) },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    const validator = createImageDefectValidator({
+      IMAGE_DEFECT_VALIDATOR_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      CLOUDFLARE_VISION_MODEL: "@cf/meta/llama-vision",
+    } as unknown as NodeJS.ProcessEnv);
+    const defect = await validator.validate({ brief: buildTrendImageBrief("oversized"), imageBuffer, pixel, candidateIndex: 0 });
+
+    assert.equal(pixel.ocr.textDetected, false);
+    assert.equal(calls, 1);
     assert.equal(defect.available, true);
     assert.equal(defect.passed, false);
-    assert.ok(defect.rejectionReasons.some((reason) => reason.includes("defect confidence 0.00 below 0.75")));
-    assert.ok(defect.rejectionReasons.some((reason) => reason.includes("defect evidence subjectDescription is empty")));
-    assert.ok(defect.rejectionReasons.some((reason) => reason.includes("no supporting evidence")));
+    assert.equal(defect.visibleLabelDetected, true);
+    assert.equal(defect.imitationWritingDetected, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fused hybrid layering is rejected as impossible garment construction", async () => {
+  const sharp = (await import("sharp")).default;
+  const brief = buildTrendImageBrief("layering");
+  const imageBuffer = await sharp({
+    create: { width: 1024, height: 1280, channels: 3, background: "#5f6d78" },
+  }).jpeg().toBuffer();
+  const pixel = await analyzeImagePixels(imageBuffer, { ocrProvider: noTextOcr });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    result: { response: validProviderDefectPayload({
+      fusedHybridGarmentDetected: true,
+      subjectDescription: "several clothing layers melted into one hybrid object",
+      compositionDescription: "centred garment with collars and sleeves fused through impossible seams",
+      rejectionReasons: ["layers do not have independent collars, hems, sleeves or edges"],
+    }) },
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+  try {
+    const validator = createImageDefectValidator({
+      IMAGE_DEFECT_VALIDATOR_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      CLOUDFLARE_VISION_MODEL: "@cf/meta/llama-vision",
+    } as unknown as NodeJS.ProcessEnv);
+    const defect = await validator.validate({ brief, imageBuffer, pixel, candidateIndex: 0 });
+    const semantic = validSemanticPayload({ requiredCuesPresent: true }) as any;
+    const validation = validateTrendConceptCandidate({
+      brief,
+      facts: candidateFactsFromAnalysis({ brief, pixel, semantic, defect, candidateIndex: 0 }),
+    });
+
+    assert.equal(defect.passed, false);
+    assert.equal(defect.fusedHybridGarmentDetected, true);
+    assert.equal(validation.passed, false);
+    assert.ok(validation.rejectionReasons.some((reason) => reason.includes("fused or impossible hybrid garment")));
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -533,6 +678,8 @@ test("publication validation independently enforces defect confidence threshold"
     labelForensicsPassed: true,
     labelForensicsUncertain: false,
     labelForensicsReasons: [],
+    reviewAttempts: 1,
+    incompleteEvidenceFields: [],
   };
   const facts = candidateFactsFromAnalysis({ brief, pixel, semantic, defect, candidateIndex: 0 });
   const result = validateTrendConceptCandidate({ brief, facts });
@@ -844,14 +991,15 @@ test("Cloudflare smoke test script does not import Supabase or production queue 
   assert.equal(source.includes("createImageDefectValidator"), true);
 });
 
-test("Cloudflare quality calibration is manual-only, zero-Supabase and supports a three-image retest cap", () => {
+test("Cloudflare quality calibration is manual-only, zero-Supabase and limited to oversized and layering", () => {
   const source = readFileSync("scripts/cloudflare-image-quality-calibration.ts", "utf8");
   const workflow = readFileSync(".github/workflows/cloudflare-image-quality-calibration.yml", "utf8");
 
   assert.equal(source.includes("@supabase/supabase-js"), false);
   assert.equal(source.includes("image_generation_jobs"), false);
   assert.equal(source.includes("claim_next_image_generation_job"), false);
-  assert.equal(source.includes("DEFAULT_MAX_TEMPORARY_IMAGES = 5"), true);
+  assert.equal(source.includes('DEFAULT_CALIBRATION_KEYWORDS = ["oversized", "layering"]'), true);
+  assert.equal(source.includes("DEFAULT_MAX_TEMPORARY_IMAGES = 2"), true);
   assert.equal(source.includes("CALIBRATION_MAX_TEMPORARY_IMAGES"), true);
   assert.equal(source.includes("candidateCount: 1"), true);
   assert.match(source, /oversized/);
@@ -861,7 +1009,8 @@ test("Cloudflare quality calibration is manual-only, zero-Supabase and supports 
   assert.match(source, /kurta/);
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /keywords/);
-  assert.match(workflow, /CALIBRATION_MAX_TEMPORARY_IMAGES: 3/);
+  assert.match(workflow, /default: oversized,layering/);
+  assert.match(workflow, /CALIBRATION_MAX_TEMPORARY_IMAGES: 2/);
   assert.equal(workflow.includes("schedule:"), false);
   assert.equal(workflow.includes("ENABLE_CLOUD_IMAGE_WORKER"), false);
 });

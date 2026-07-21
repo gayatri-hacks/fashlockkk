@@ -12,6 +12,7 @@ export type ImageDefectValidation = {
   logoOrWatermarkDetected: boolean;
   materialContradictsBrief: boolean;
   repeatedCatalogComposition: boolean;
+  fusedHybridGarmentDetected: boolean;
   detectedMaterial: string;
   subjectDescription: string;
   materialDescription: string;
@@ -22,6 +23,8 @@ export type ImageDefectValidation = {
   labelForensicsPassed: boolean;
   labelForensicsUncertain: boolean;
   labelForensicsReasons: string[];
+  reviewAttempts: number;
+  incompleteEvidenceFields: string[];
   provider: string;
   error?: string;
 };
@@ -58,6 +61,7 @@ const DefectPayloadSchema = z.object({
   logoOrWatermarkDetected: BooleanSchema,
   materialContradictsBrief: BooleanSchema,
   repeatedCatalogComposition: BooleanSchema,
+  fusedHybridGarmentDetected: BooleanSchema,
   detectedMaterial: z.string(),
   subjectDescription: z.string(),
   materialDescription: z.string(),
@@ -77,6 +81,7 @@ const DEFECT_GUIDED_JSON_SCHEMA = {
     logoOrWatermarkDetected: { type: "boolean" },
     materialContradictsBrief: { type: "boolean" },
     repeatedCatalogComposition: { type: "boolean" },
+    fusedHybridGarmentDetected: { type: "boolean" },
     detectedMaterial: { type: "string" },
     subjectDescription: { type: "string" },
     materialDescription: { type: "string" },
@@ -91,6 +96,7 @@ const DEFECT_GUIDED_JSON_SCHEMA = {
     "logoOrWatermarkDetected",
     "materialContradictsBrief",
     "repeatedCatalogComposition",
+    "fusedHybridGarmentDetected",
     "detectedMaterial",
     "subjectDescription",
     "materialDescription",
@@ -101,7 +107,7 @@ const DEFECT_GUIDED_JSON_SCHEMA = {
   ],
 };
 
-function unavailableDefectValidation(provider: string, error: string): ImageDefectValidation {
+function unavailableDefectValidation(provider: string, error: string, reviewAttempts = 0, incompleteEvidenceFields: string[] = []): ImageDefectValidation {
   return {
     available: false,
     passed: false,
@@ -110,6 +116,7 @@ function unavailableDefectValidation(provider: string, error: string): ImageDefe
     logoOrWatermarkDetected: true,
     materialContradictsBrief: true,
     repeatedCatalogComposition: true,
+    fusedHybridGarmentDetected: true,
     detectedMaterial: "",
     subjectDescription: "",
     materialDescription: "",
@@ -120,6 +127,8 @@ function unavailableDefectValidation(provider: string, error: string): ImageDefe
     labelForensicsPassed: false,
     labelForensicsUncertain: true,
     labelForensicsReasons: [error],
+    reviewAttempts,
+    incompleteEvidenceFields,
     provider,
     error,
   };
@@ -158,6 +167,7 @@ function defectKeyCount(value: unknown) {
     "logoOrWatermarkDetected",
     "materialContradictsBrief",
     "repeatedCatalogComposition",
+    "fusedHybridGarmentDetected",
     "detectedMaterial",
     "subjectDescription",
     "materialDescription",
@@ -227,30 +237,34 @@ function requiredEvidenceDescriptions(data: z.infer<typeof DefectPayloadSchema>)
   ] as const;
 }
 
-function parseStrictDefectJson(payload: unknown, provider: string, labelForensics?: LabelForensicsResult): ImageDefectValidation {
+export const DEFECT_VALIDATOR_INCOMPLETE_RESPONSE = "defect_validator_incomplete_response" as const;
+
+class IncompleteDefectResponseError extends Error {
+  readonly code = DEFECT_VALIDATOR_INCOMPLETE_RESPONSE;
+
+  constructor(readonly incompleteFields: string[]) {
+    super(DEFECT_VALIDATOR_INCOMPLETE_RESPONSE);
+    this.name = "IncompleteDefectResponseError";
+  }
+}
+
+function parseStrictDefectJson(payload: unknown, provider: string, labelForensics: LabelForensicsResult | undefined, reviewAttempts: number): ImageDefectValidation {
   const { parsed, shape } = normalizeDefectPayload(payload, provider);
   const result = DefectPayloadSchema.safeParse(parsed);
   if (!result.success) {
     throw new Error(`${provider} defect validator returned invalid JSON schema; responseShape=${shape}; issues=${zodIssueSummary(result.error)}`);
   }
 
+  const incompleteEvidenceFields = requiredEvidenceDescriptions(result.data)
+    .filter(([, value]) => !value.trim())
+    .map(([field]) => field);
+  if (incompleteEvidenceFields.length) {
+    throw new IncompleteDefectResponseError(incompleteEvidenceFields);
+  }
+
   const rejectionReasons = Array.from(new Set(result.data.rejectionReasons.map(String).filter(Boolean)));
   if (result.data.confidence < 0.75) {
     rejectionReasons.push(`defect confidence ${result.data.confidence.toFixed(2)} below 0.75`);
-  }
-  for (const [field, value] of requiredEvidenceDescriptions(result.data)) {
-    if (!value.trim()) rejectionReasons.push(`defect evidence ${field} is empty`);
-  }
-  if (
-    !result.data.visibleLabelDetected &&
-    !result.data.imitationWritingDetected &&
-    !result.data.logoOrWatermarkDetected &&
-    !result.data.materialContradictsBrief &&
-    !result.data.repeatedCatalogComposition &&
-    result.data.confidence === 0 &&
-    requiredEvidenceDescriptions(result.data).every(([, value]) => !value.trim())
-  ) {
-    rejectionReasons.push("defect review returned a pass with no supporting evidence");
   }
   if (labelForensics?.uncertain) rejectionReasons.push("label forensics uncertain");
   if (labelForensics && !labelForensics.passed) rejectionReasons.push(...labelForensics.reasons);
@@ -261,6 +275,7 @@ function parseStrictDefectJson(payload: unknown, provider: string, labelForensic
     !result.data.logoOrWatermarkDetected &&
     !result.data.materialContradictsBrief &&
     !result.data.repeatedCatalogComposition &&
+    !result.data.fusedHybridGarmentDetected &&
     result.data.confidence >= 0.75 &&
     requiredEvidenceDescriptions(result.data).every(([, value]) => Boolean(value.trim())) &&
     (labelForensics ? labelForensics.passed : true) &&
@@ -274,6 +289,7 @@ function parseStrictDefectJson(payload: unknown, provider: string, labelForensic
     logoOrWatermarkDetected: result.data.logoOrWatermarkDetected,
     materialContradictsBrief: result.data.materialContradictsBrief,
     repeatedCatalogComposition: result.data.repeatedCatalogComposition,
+    fusedHybridGarmentDetected: result.data.fusedHybridGarmentDetected,
     detectedMaterial: result.data.detectedMaterial,
     subjectDescription: result.data.subjectDescription,
     materialDescription: result.data.materialDescription,
@@ -284,6 +300,8 @@ function parseStrictDefectJson(payload: unknown, provider: string, labelForensic
     labelForensicsPassed: labelForensics?.passed ?? true,
     labelForensicsUncertain: labelForensics?.uncertain ?? false,
     labelForensicsReasons: labelForensics?.reasons ?? [],
+    reviewAttempts,
+    incompleteEvidenceFields: [],
     provider,
   };
 }
@@ -418,10 +436,17 @@ export async function runLabelForensics(imageBuffer: Buffer, pixel: ImagePixelAn
   };
 }
 
-function defectPrompt(brief: TrendImageBrief, pixel: ImagePixelAnalysis, candidateIndex: number) {
+function defectPrompt(
+  brief: TrendImageBrief,
+  pixel: ImagePixelAnalysis,
+  candidateIndex: number,
+  reviewMode: "full_image" | "targeted_crop_sheet",
+) {
   return [
     "You are an independent Fashlock image defect reviewer. Return strict JSON only. Do not include markdown, prose, comments or extra keys.",
-    "The supplied image is a crop sheet: it includes the full generated trend card image plus enlarged neckline, collar, upper-garment and likely label/tag detail regions.",
+    reviewMode === "targeted_crop_sheet"
+      ? "This is the one allowed retry. The supplied review sheet contains the full generated image plus enlarged neckline, inner-collar, upper-garment, sewn-label and tag-detail crops. Inspect every panel."
+      : "The supplied image is the full generated trend card image. Inspect the entire image, especially any neckline, inner collar, tag patch, seams and garment intersections.",
     `Candidate index: ${candidateIndex}`,
     `Canonical keyword: ${brief.canonicalKeyword}`,
     `Requested subject: ${brief.visualSubject}`,
@@ -433,13 +458,15 @@ function defectPrompt(brief: TrendImageBrief, pixel: ImagePixelAnalysis, candida
     `OCR suspiciousTagLikeTextDetected: ${Boolean(pixel.ocr.suspiciousTagLikeTextDetected)}`,
     "",
     "Fail closed. Look especially at collar, neckline, placket, pocket, hem, tag and seam regions.",
-    "If any collar label, sewn-in label, care tag, brand tab, fake garment tag, imitation writing, tiny letter-like mark, logo or watermark is visible, set the matching defect boolean true even if the text is unreadable.",
+    "Visual label detection is required independently of OCR. OCR can miss small or invented writing. If any collar label, sewn-in label, size tab, care tag, brand patch, fake garment tag, imitation writing, tiny letter-like mark, logo or watermark is visually present, set the matching defect boolean true even when OCR says no text and even if the mark is unreadable.",
     "Treat uncertainty as rejection. If the crop is blurry, ambiguous or could plausibly contain a label/tag/writing, set visibleLabelDetected=true or imitationWritingDetected=true and include the uncertainty in rejectionReasons.",
     "A clean garment must show plain fabric at the inner neckline when the neckline is visible. Any white rectangle, red mark, black mark or tag-like patch there is a defect.",
     "Reject if the material visible in the image contradicts the requested material family. Example: denim/chambray-looking cloth contradicts a request for crisp poplin, voile or silk.",
     "Reject repetitive centered product-catalog composition: a garment centered front-on against a plain grey/beige wall with little asymmetry, movement, texture crop, construction focus or editorial styling.",
+    "Reject fused or impossible clothing objects. For layering, clearly verify that separate garments have distinct collars, sleeves, hems, edges and believable overlapping seams. If layers melt into one hybrid garment or have impossible construction, set fusedHybridGarmentDetected=true.",
+    "Every description field is mandatory evidence. Describe what is actually visible in the subject, material, composition and tag/neckline regions. detectedMaterial must name the observed material. Never return an empty evidence field and never report high confidence without specific visual evidence.",
     "Do not award perfect scores by default. This pass is only looking for defects.",
-    "JSON schema: {\"visibleLabelDetected\":boolean,\"imitationWritingDetected\":boolean,\"logoOrWatermarkDetected\":boolean,\"materialContradictsBrief\":boolean,\"repeatedCatalogComposition\":boolean,\"detectedMaterial\":\"string\",\"subjectDescription\":\"string\",\"materialDescription\":\"string\",\"compositionDescription\":\"string\",\"tagRegionDescription\":\"string\",\"rejectionReasons\":[\"string\"],\"confidence\":0-1}",
+    "JSON schema: {\"visibleLabelDetected\":boolean,\"imitationWritingDetected\":boolean,\"logoOrWatermarkDetected\":boolean,\"materialContradictsBrief\":boolean,\"repeatedCatalogComposition\":boolean,\"fusedHybridGarmentDetected\":boolean,\"detectedMaterial\":\"string\",\"subjectDescription\":\"string\",\"materialDescription\":\"string\",\"compositionDescription\":\"string\",\"tagRegionDescription\":\"string\",\"rejectionReasons\":[\"string\"],\"confidence\":0-1}",
   ].join("\n");
 }
 
@@ -453,9 +480,11 @@ class CloudflareDefectValidator implements ImageDefectValidator {
     private readonly timeoutMs: number,
   ) {}
 
-  async validate(input: { brief: TrendImageBrief; imageBuffer: Buffer; pixel: ImagePixelAnalysis; candidateIndex: number }): Promise<ImageDefectValidation> {
-    const reviewSheet = await buildDefectReviewSheet(input.imageBuffer);
-    const labelForensics = await runLabelForensics(input.imageBuffer, input.pixel);
+  private async review(
+    input: { brief: TrendImageBrief; pixel: ImagePixelAnalysis; candidateIndex: number },
+    imageBuffer: Buffer,
+    reviewMode: "full_image" | "targeted_crop_sheet",
+  ) {
     const timer = timeoutSignal(this.timeoutMs);
     try {
       const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(this.accountId)}/ai/run/${this.model}`, {
@@ -472,11 +501,11 @@ class CloudflareDefectValidator implements ImageDefectValidator {
             },
             {
               role: "user",
-              content: defectPrompt(input.brief, input.pixel, input.candidateIndex),
+              content: defectPrompt(input.brief, input.pixel, input.candidateIndex, reviewMode),
             },
           ],
-          image: dataUri(reviewSheet),
-          max_tokens: 800,
+          image: dataUri(imageBuffer),
+          max_tokens: 900,
           temperature: 0,
           guided_json: DEFECT_GUIDED_JSON_SCHEMA,
         }),
@@ -487,19 +516,44 @@ class CloudflareDefectValidator implements ImageDefectValidator {
         throw new RetryableImageGenerationError("Cloudflare defect validator quota exceeded", parseRetryAfter(response.headers.get("retry-after")), "cloudflare");
       }
       if (!response.ok) {
-        return unavailableDefectValidation(this.provider, `Cloudflare defect validator returned ${response.status}`);
+        throw new Error(`Cloudflare defect validator returned ${response.status}`);
       }
+      return await response.json();
+    } finally {
+      timer.clear();
+    }
+  }
 
+  async validate(input: { brief: TrendImageBrief; imageBuffer: Buffer; pixel: ImagePixelAnalysis; candidateIndex: number }): Promise<ImageDefectValidation> {
+    const labelForensics = await runLabelForensics(input.imageBuffer, input.pixel);
+    let reviewAttempts = 0;
+    try {
       try {
-        return parseStrictDefectJson(await response.json(), this.provider, labelForensics);
+        reviewAttempts = 1;
+        const firstPayload = await this.review(input, input.imageBuffer, "full_image");
+        return parseStrictDefectJson(firstPayload, this.provider, labelForensics, 1);
       } catch (error) {
-        return unavailableDefectValidation(this.provider, error instanceof Error ? error.message : String(error));
+        if (!(error instanceof IncompleteDefectResponseError)) throw error;
+        const reviewSheet = await buildDefectReviewSheet(input.imageBuffer);
+        try {
+          reviewAttempts = 2;
+          const retryPayload = await this.review(input, reviewSheet, "targeted_crop_sheet");
+          return parseStrictDefectJson(retryPayload, this.provider, labelForensics, 2);
+        } catch (retryError) {
+          if (retryError instanceof IncompleteDefectResponseError) {
+            return unavailableDefectValidation(
+              this.provider,
+              DEFECT_VALIDATOR_INCOMPLETE_RESPONSE,
+              2,
+              retryError.incompleteFields,
+            );
+          }
+          throw retryError;
+        }
       }
     } catch (error) {
       if (error instanceof RetryableImageGenerationError) throw error;
-      return unavailableDefectValidation(this.provider, error instanceof Error ? error.message : "Cloudflare defect validator failed");
-    } finally {
-      timer.clear();
+      return unavailableDefectValidation(this.provider, error instanceof Error ? error.message : "Cloudflare defect validator failed", reviewAttempts);
     }
   }
 }

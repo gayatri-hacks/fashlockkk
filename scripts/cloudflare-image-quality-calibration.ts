@@ -11,9 +11,9 @@ import { createImageSemanticValidator } from "../lib/images/image-semantic-valid
 import { buildTrendImageBrief } from "../lib/images/trend-image-brief";
 import { candidateFactsFromAnalysis, validateTrendConceptCandidate } from "../lib/images/trend-concept-validation";
 
-const DEFAULT_CALIBRATION_KEYWORDS = ["oversized", "floral", "leather", "layering", "kurta"] as const;
+const DEFAULT_CALIBRATION_KEYWORDS = ["oversized", "layering"] as const;
 const SAFE_CALIBRATION_KEYWORDS = new Set(DEFAULT_CALIBRATION_KEYWORDS);
-const DEFAULT_MAX_TEMPORARY_IMAGES = 5;
+const DEFAULT_MAX_TEMPORARY_IMAGES = 2;
 const IMAGE_SIZE = "1024x1280";
 const OUTPUT_DIR = ".tmp/cloudflare-image-quality-calibration";
 
@@ -67,13 +67,13 @@ async function decodedImageMetadata(imageBuffer: Buffer) {
 function calibrationDirection(keyword: string) {
   const directions: Record<string, string> = {
     oversized:
-      "Manual calibration emphasis: avoid a centered front-on shirt on a grey wall. Create a suspended, off-centre oversized garment with visible dropped shoulders, oversized collar and asymmetric air around the cloth.",
+      "Manual calibration emphasis: show no visible inner collar or neckline tag area and no sewn label, size tab, brand patch or imitation writing. Prefer an off-centre close study of exaggerated dropped shoulder, sleeve volume and an extra-wide silhouette. Avoid a complete centred ecommerce shirt.",
     floral:
       "Manual calibration emphasis: make this a macro fashion textile or garment-surface study with botanical print registration, not a bouquet, vase or decorative flower object.",
     leather:
       "Manual calibration emphasis: make this an architectural leather construction still-life with dark leather grain, edge highlights and stitching, not denim, chambray or cotton.",
     layering:
-      "Manual calibration emphasis: make this an asymmetric overlap of multiple garment materials with visible stacked collars, hems and texture contrast, not one centered garment.",
+      "Manual calibration emphasis: show clearly separate real garments with distinct collars, hems, sleeves and edges overlapping naturally. No fused garments, impossible seams or hybrid clothing object. Use believable material contrast and an asymmetric editorial arrangement. Avoid a centred product catalogue layout.",
     kurta:
       "Manual calibration emphasis: make this an edge-to-edge cropped kurta construction detail in indigo, maroon, forest green or restrained saffron; no caption panel, no decorative border and no fake writing.",
   };
@@ -94,7 +94,7 @@ function promptForKeyword(keyword: string, imageModel: string) {
   return [
     basePrompt,
     "",
-    "Manual quality calibration requirement: this preview belongs to a five-card diversity set. Vary composition, palette and material from the other calibration keywords. Avoid repetitive centered garment-on-neutral-wall product catalog imagery.",
+    "Manual quality calibration requirement: this preview belongs to a two-card oversized/layering retest. Vary composition, palette and material between the two previews. Avoid repetitive centered garment-on-neutral-wall product catalog imagery.",
     calibrationDirection(keyword),
   ].filter(Boolean).join("\n");
 }
@@ -224,7 +224,21 @@ async function main() {
         if (!semantic.available) throw new Error(`Cloudflare semantic validation failed strict JSON schema: ${semantic.error || semantic.rejectionReasons.join("; ")}`);
 
         const defect = await defectValidator.validate({ brief, imageBuffer: generated.buffer, pixel, candidateIndex: 0 });
-        if (!defect.available) throw new Error(`Cloudflare defect validation failed strict JSON schema: ${defect.error || defect.rejectionReasons.join("; ")}`);
+        if (!defect.available) {
+          Object.assign(report, {
+            defect: {
+              provider: defect.provider,
+              available: false,
+              passed: false,
+              error: defect.error,
+              confidence: defect.confidence,
+              reviewAttempts: defect.reviewAttempts,
+              incompleteEvidenceFields: defect.incompleteEvidenceFields,
+              rejectionReasons: defect.rejectionReasons,
+            },
+          });
+          throw new Error(`Cloudflare defect validation failed closed: ${defect.error || defect.rejectionReasons.join("; ")}`);
+        }
 
         const facts = candidateFactsFromAnalysis({ brief, pixel, semantic, defect, candidateIndex: 0 });
         const validation = validateTrendConceptCandidate({ brief, facts });
@@ -269,18 +283,22 @@ async function main() {
           },
           defect: {
             provider: defect.provider,
+            available: defect.available,
             passed: defect.passed,
             visibleLabelDetected: defect.visibleLabelDetected,
             imitationWritingDetected: defect.imitationWritingDetected,
             logoOrWatermarkDetected: defect.logoOrWatermarkDetected,
             materialContradictsBrief: defect.materialContradictsBrief,
             repeatedCatalogComposition: defect.repeatedCatalogComposition,
+            fusedHybridGarmentDetected: defect.fusedHybridGarmentDetected,
             detectedMaterial: defect.detectedMaterial,
             subjectDescription: defect.subjectDescription,
             materialDescription: defect.materialDescription,
             compositionDescription: defect.compositionDescription,
             tagRegionDescription: defect.tagRegionDescription,
             confidence: defect.confidence,
+            reviewAttempts: defect.reviewAttempts,
+            incompleteEvidenceFields: defect.incompleteEvidenceFields,
             rejectionReasons: defect.rejectionReasons,
           },
           publicationValidation: {
