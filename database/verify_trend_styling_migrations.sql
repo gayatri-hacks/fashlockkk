@@ -1,4 +1,4 @@
--- Consolidated, read-only verification for styling migrations 027-030.
+-- Consolidated, read-only verification for styling migrations 027-031.
 -- One statement intentionally returns every check plus one aggregate summary row.
 
 with checks(phase,check_name,passed,details) as (
@@ -213,11 +213,61 @@ with checks(phase,check_name,passed,details) as (
     ),
     'pending research jobs cannot be reclaimed before retry_after'
 
+  union all select '031_prerequisite','deployed research queue and market evidence required by reliability migration exist',
+    to_regclass('public.trend_style_research_jobs') is not null
+      and to_regclass('public.trend_style_concepts') is not null
+      and to_regclass('public.trend_style_market_evidence') is not null,
+    '030 research queue, isolated concepts and market evidence'
+
+  union all select '031','market discovery failure diagnostics table and columns exist',
+    to_regclass('public.trend_style_market_discovery_failures') is not null
+      and not exists (
+        select 1 from (values
+          ('job_id'),('concept_id'),('canonical_keyword'),('market'),('provider'),('error_category'),
+          ('failure_reason'),('retry_after'),('provider_timestamp'),('created_at')
+        ) expected(column_name)
+        where not exists(select 1 from information_schema.columns c where c.table_schema='public' and c.table_name='trend_style_market_discovery_failures' and c.column_name=expected.column_name)
+      ),
+    'separate bounded diagnostics retain job/concept/market/provider/retry context'
+
+  union all select '031','market discovery failure constraints and indexes exist',
+    not exists (
+      select 1 from (values
+        ('trend_style_market_discovery_failures_market_check'),
+        ('trend_style_market_discovery_failures_provider_check'),
+        ('trend_style_market_discovery_failures_error_category_check'),
+        ('trend_style_market_discovery_failures_failure_reason_check')
+      ) expected(constraint_name)
+      where not exists(select 1 from pg_constraint c where c.connamespace='public'::regnamespace and c.conname=expected.constraint_name)
+    )
+      and exists(select 1 from pg_indexes i where i.schemaname='public' and i.indexname='trend_style_market_discovery_failures_job_idx')
+      and exists(select 1 from pg_indexes i where i.schemaname='public' and i.indexname='trend_style_market_discovery_failures_retry_idx'),
+    'bounded market/provider/category/reason plus job and retry indexes'
+
+  union all select '031','quota deferral RPC is atomic and releases the claimed attempt',
+    to_regprocedure('public.defer_trend_style_research_job_quota(uuid,integer,timestamptz,text)') is not null
+      and coalesce(
+        regexp_replace(pg_get_functiondef(to_regprocedure('public.defer_trend_style_research_job_quota(uuid,integer,timestamptz,text)')),'\s+','','g')
+          ilike '%status=''pending''%attempts=attempts-1%retry_after=retry_at%status=''researching''%attempts=expected_claimed_attempts%',
+        false
+      ),
+    'only the exactly claimed job is deferred and its claim increment is atomically released'
+
+  union all select '031','controlled recovery RPC requires exact job state, concept and confirmation',
+    to_regprocedure('public.recover_trend_style_research_job_attempt(uuid,uuid,integer,text)') is not null
+      and coalesce(
+        regexp_replace(pg_get_functiondef(to_regprocedure('public.recover_trend_style_research_job_attempt(uuid,uuid,integer,text)')),'\s+','','g')
+          ilike '%CONFIRM_PRODUCTION_STYLING_JOB_RECOVERY%id=target_job_id%concept_id=expected_concept_id%status=''pending''%attempts=expected_attempts%',
+        false
+      ),
+    'recovery only releases one matching pending attempt and does not delete concept, evidence or formulas'
+
   union all select 'security','all styling research tables have RLS enabled',
     not exists (
       select 1 from (values
         ('trend_style_evidence'),('trend_outfit_formulas'),('trend_formula_feedback'),
-        ('trend_style_concepts'),('trend_style_research_jobs'),('trend_style_market_evidence')
+        ('trend_style_concepts'),('trend_style_research_jobs'),('trend_style_market_evidence'),
+        ('trend_style_market_discovery_failures')
       ) expected(table_name)
       where not exists(
         select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
@@ -229,7 +279,8 @@ with checks(phase,check_name,passed,details) as (
   union all select 'security','anon and authenticated are blocked from internal styling tables',
     not exists (
       select 1 from (values
-        ('trend_style_evidence'),('trend_style_concepts'),('trend_style_research_jobs'),('trend_style_market_evidence')
+        ('trend_style_evidence'),('trend_style_concepts'),('trend_style_research_jobs'),('trend_style_market_evidence'),
+        ('trend_style_market_discovery_failures')
       ) expected(table_name)
       where coalesce(has_table_privilege('anon',to_regclass(format('public.%I',expected.table_name)),'SELECT'),false)
          or coalesce(has_table_privilege('anon',to_regclass(format('public.%I',expected.table_name)),'INSERT'),false)
@@ -251,7 +302,8 @@ with checks(phase,check_name,passed,details) as (
     not exists (
       select 1 from (values
         ('trend_style_evidence'),('trend_outfit_formulas'),('trend_formula_feedback'),
-        ('trend_style_concepts'),('trend_style_research_jobs'),('trend_style_market_evidence')
+        ('trend_style_concepts'),('trend_style_research_jobs'),('trend_style_market_evidence'),
+        ('trend_style_market_discovery_failures')
       ) expected(table_name)
       where not coalesce(has_table_privilege('service_role',to_regclass(format('public.%I',expected.table_name)),'SELECT'),false)
          or not coalesce(has_table_privilege('service_role',to_regclass(format('public.%I',expected.table_name)),'INSERT'),false)
@@ -265,7 +317,9 @@ with checks(phase,check_name,passed,details) as (
       select 1 from (values
         ('public.approve_trend_formula_set(uuid)'),
         ('public.claim_next_trend_style_research_job(text)'),
-        ('public.claim_next_image_generation_job_with_quota_policy(text,text,boolean,text,integer)')
+        ('public.claim_next_image_generation_job_with_quota_policy(text,text,boolean,text,integer)'),
+        ('public.defer_trend_style_research_job_quota(uuid,integer,timestamptz,text)'),
+        ('public.recover_trend_style_research_job_attempt(uuid,uuid,integer,text)')
       ) expected(signature)
       left join pg_proc p on p.oid=to_regprocedure(expected.signature)
       where p.oid is null or not p.prosecdef or not coalesce(p.proconfig,'{}') @> array['search_path=public']
@@ -277,7 +331,9 @@ with checks(phase,check_name,passed,details) as (
       select 1 from (values
         ('public.approve_trend_formula_set(uuid)'),
         ('public.claim_next_trend_style_research_job(text)'),
-        ('public.claim_next_image_generation_job_with_quota_policy(text,text,boolean,text,integer)')
+        ('public.claim_next_image_generation_job_with_quota_policy(text,text,boolean,text,integer)'),
+        ('public.defer_trend_style_research_job_quota(uuid,integer,timestamptz,text)'),
+        ('public.recover_trend_style_research_job_attempt(uuid,uuid,integer,text)')
       ) expected(signature)
       where to_regprocedure(expected.signature) is null
          or not coalesce(has_function_privilege('service_role',to_regprocedure(expected.signature),'EXECUTE'),false)

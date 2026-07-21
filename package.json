@@ -10,6 +10,7 @@
     "test:trends": "node --import tsx --test lib/trends/*.test.ts lib/images/*.test.ts lib/trend-styling/*.test.ts",
     "trends:plan-style-refresh": "node --import tsx scripts/plan-trend-style-refresh.ts --dry-run",
     "trends:style-research:manual": "node --import tsx scripts/run-manual-trend-styling-research.ts --dry-run",
+    "trends:recover-linen-style-job": "node --import tsx scripts/recover-linen-styling-job.ts",
     "trends:period-status": "tsx scripts/report-trend-period-status.ts",
     "trends:recompute": "tsx scripts/recompute-multi-region-trends.ts",
     "trends:rollover": "python3 scraper/fetch_global_trends.py --rollover",

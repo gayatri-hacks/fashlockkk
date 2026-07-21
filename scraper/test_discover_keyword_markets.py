@@ -130,7 +130,7 @@ class KeywordMarketDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(result["markets"]), 12)
         self.assertTrue(all(item["failureReason"] == "google_trends_rate_limited" for item in result["markets"]))
         self.assertTrue(all(item["retryInformation"]["rateLimited"] for item in result["markets"]))
-        self.assertTrue(all(item["retryInformation"]["retryAfterSeconds"] == 120 for item in result["markets"]))
+        self.assertTrue(all(item["retryInformation"]["retryAfterSeconds"] == 21600 for item in result["markets"]))
 
     def test_cache_avoids_provider_calls_for_fresh_exact_market_result(self):
         result = discover_keyword_markets(

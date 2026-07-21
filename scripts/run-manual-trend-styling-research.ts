@@ -22,6 +22,7 @@ import {
   runResearchWorker,
 } from "../lib/trend-styling/research-worker";
 import type { TrendStyleEvidence } from "../lib/trend-styling/schema";
+import { safeResearchDiagnostic } from "../lib/trend-styling/research-diagnostics";
 import { getSupabaseClient } from "../lib/supabase";
 
 async function main() {
@@ -72,7 +73,13 @@ async function main() {
         interestProvider: createConfiguredMarketInterestProvider(),
         searchProvider: createStylingEvidenceSearchProvider(),
       });
-      if (researchResult.status !== "completed") throw new Error(`Research worker ${researchResult.status}`);
+      if (researchResult.status !== "completed") {
+        console.log(JSON.stringify({
+          workflow: MANUAL_STYLING_WORKFLOW_NAME,
+          ...safeResearchDiagnostic(researchResult),
+        }));
+        throw new Error("Manual styling research deferred");
+      }
       return { evidence: researchResult.evidence };
     },
     generate: async (evidence) => {

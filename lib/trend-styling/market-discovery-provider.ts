@@ -16,6 +16,11 @@ export const MARKET_DISCOVERY_LIMITS = {
   processTimeoutMs: 360_000,
 } as const;
 
+export const GOOGLE_TRENDS_QUOTA_DEFERRAL = {
+  minimumHours: 6,
+  maximumHours: 24,
+} as const;
+
 export type MarketDiscoveryRetryInformation = {
   attempts: number;
   maxAttempts: number;
@@ -48,6 +53,50 @@ export type MarketDiscoveryBatch = {
 
 export interface MarketInterestProvider {
   discover(input: { keyword: string; conceptId: string }): Promise<MarketDiscoveryBatch>;
+}
+
+export function isUsableMarketDiscoveryResult(result: MarketDiscoveryResult) {
+  return !result.retryInformation.rateLimited &&
+    result.confidence > 0 &&
+    result.observationCompleteness > 0 &&
+    (result.normalizedInterest > 0 || Math.abs(result.recentMomentum) > 0);
+}
+
+export function isAllRateLimitedMarketDiscoveryBatch(batch: MarketDiscoveryBatch) {
+  return batch.markets.length === EXPECTED_MARKETS.length && batch.markets.every((market) =>
+    market.retryInformation.rateLimited &&
+    market.failureReason === "google_trends_rate_limited" &&
+    market.normalizedInterest === 0 &&
+    market.confidence === 0 &&
+    market.observationCompleteness === 0,
+  );
+}
+
+export function googleTrendsQuotaRetryAt(batch: MarketDiscoveryBatch, claimedAttempts: number, now: Date) {
+  const configuredCandidates = batch.markets
+    .map((market) => market.retryInformation.nextRetryAt)
+    .filter((value): value is string => Boolean(value))
+    .map((value) => new Date(value).getTime())
+    .filter((value) => Number.isFinite(value) && value > now.getTime());
+  const attemptBackoffHours = Math.min(
+    GOOGLE_TRENDS_QUOTA_DEFERRAL.maximumHours,
+    GOOGLE_TRENDS_QUOTA_DEFERRAL.minimumHours * (2 ** Math.max(0, claimedAttempts - 1)),
+  );
+  const minimum = now.getTime() + attemptBackoffHours * 3_600_000;
+  const providerWindow = configuredCandidates.length ? Math.max(...configuredCandidates) : minimum;
+  return new Date(Math.min(
+    now.getTime() + GOOGLE_TRENDS_QUOTA_DEFERRAL.maximumHours * 3_600_000,
+    Math.max(minimum, providerWindow),
+  )).toISOString();
+}
+
+export class GoogleTrendsQuotaDeferralError extends Error {
+  readonly errorCategory = "google_trends_quota_or_rate_limit" as const;
+
+  constructor(readonly retryAfter: string) {
+    super("Google Trends quota window is unavailable; research deferred");
+    this.name = "GoogleTrendsQuotaDeferralError";
+  }
 }
 
 function finiteNumber(value: unknown, name: string, minimum: number, maximum: number) {

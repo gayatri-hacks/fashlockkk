@@ -9,13 +9,15 @@ function requirePattern(label:string,text:string,pattern:RegExp){assert.match(te
 
 async function main(){
   const root=process.cwd();
-  const [migration027,migration028,migration030,preflight]=await Promise.all([
+  const [migration027,migration028,migration029,migration030,migration031,preflight]=await Promise.all([
     readFile(path.join(root,"database/027_trend_styling_intelligence.sql"),"utf8"),
     readFile(path.join(root,"database/028_trend_styling_market_research.sql"),"utf8"),
+    readFile(path.join(root,"database/029_image_quota_deferral.sql"),"utf8"),
     readFile(path.join(root,"database/030_repo_owned_market_discovery.sql"),"utf8"),
+    readFile(path.join(root,"database/031_trend_styling_market_reliability.sql"),"utf8"),
     readFile(path.join(root,"database/verify_trend_styling_migrations.sql"),"utf8"),
   ]);
-  const migrations=`${migration027}\n${migration028}\n${migration030}`;
+  const migrations=`${migration027}\n${migration028}\n${migration029}\n${migration030}\n${migration031}`;
   assert.doesNotMatch(migrations,/\b(drop\s+table|truncate|delete\s+from)\b/i,"styling migrations must not delete tables or rows");
   assert.doesNotMatch(migrations,/\b(insert\s+into|update|delete\s+from)\s+(trend_keywords|regional_trend_scores|global_trend_scores)\b/i,"styling migrations must not write authoritative trend tables");
 
@@ -52,11 +54,25 @@ async function main(){
   const migration030FixedSearchPaths=(migration030.match(/security definer set search_path=public/gi)||[]).length;
   assert.equal(migration030FixedSearchPaths,migration030SecurityDefiners,"every SECURITY DEFINER function in 030 must fix search_path=public");
 
+  requirePattern("031 separate failure diagnostics",migration031,/create table if not exists trend_style_market_discovery_failures/i);
+  requirePattern("031 quota attempt release",migration031,/create or replace function defer_trend_style_research_job_quota[\s\S]*attempts=attempts-1[\s\S]*status='researching'[\s\S]*attempts=expected_claimed_attempts/i);
+  requirePattern("031 exact recovery guard",migration031,/create or replace function recover_trend_style_research_job_attempt[\s\S]*CONFIRM_PRODUCTION_STYLING_JOB_RECOVERY[\s\S]*concept_id=expected_concept_id[\s\S]*attempts=expected_attempts/i);
+  requirePattern("031 failure RLS",migration031,/alter table trend_style_market_discovery_failures enable row level security/i);
+  requirePattern("031 failure public revoke",migration031,/revoke all on table trend_style_market_discovery_failures from public,anon,authenticated/i);
+  requirePattern("031 failure service role",migration031,/grant select,insert,update,delete on table trend_style_market_discovery_failures to service_role/i);
+  const migration031SecurityDefiners=(migration031.match(/security definer/gi)||[]).length;
+  const migration031FixedSearchPaths=(migration031.match(/security definer set search_path=public/gi)||[]).length;
+  assert.equal(migration031FixedSearchPaths,migration031SecurityDefiners,"every SECURITY DEFINER function in 031 must fix search_path=public");
+  for(const signature of ["defer_trend_style_research_job_quota\\(uuid,integer,timestamptz,text\\)","recover_trend_style_research_job_attempt\\(uuid,uuid,integer,text\\)"]){
+    requirePattern(`${signature} public revoke`,migration031,new RegExp(`revoke all on function ${signature} from public\\s*,?\\s*anon\\s*,?\\s*authenticated`,`i`));
+    requirePattern(`${signature} service grant`,migration031,new RegExp(`grant execute on function ${signature} to service_role`,`i`));
+  }
+
   assert.doesNotMatch(preflight,/^\s*(insert|update|delete|create|alter|drop|truncate)\b/im,"catalog preflight must remain read-only");
-  for(const check of ["027_prerequisite","028_prerequisite","029_prerequisite","030_prerequisite","compatibility","formula and six-image uniqueness","RLS enabled","service-role-only"]){requirePattern(`preflight ${check}`,preflight,new RegExp(check.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),"i"));}
+  for(const check of ["027_prerequisite","028_prerequisite","029_prerequisite","030_prerequisite","031_prerequisite","compatibility","formula and six-image uniqueness","RLS enabled","service-role-only"]){requirePattern(`preflight ${check}`,preflight,new RegExp(check.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),"i"));}
   console.log("Trend styling migration static preflight: passed");
   console.log("- deployed prerequisites: database/027_trend_styling_intelligence.sql then database/028_trend_styling_market_research.sql then database/029_image_quota_deferral.sql");
-  console.log("- pending additive migration: database/030_repo_owned_market_discovery.sql");
+  console.log("- migration order: database/027_trend_styling_intelligence.sql, 028_trend_styling_market_research.sql, 029_image_quota_deferral.sql, 030_repo_owned_market_discovery.sql, then 031_trend_styling_market_reliability.sql");
   console.log("- destructive/conflicting authoritative-table behavior: none detected");
 
   if(process.argv.includes("--database")){

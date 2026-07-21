@@ -36,6 +36,8 @@ DEFAULT_MAX_PROVIDER_CALLS = 18
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_REQUEST_DELAY_SECONDS = 12.0
 DEFAULT_CACHE_TTL_HOURS = 24
+MINIMUM_GLOBAL_QUOTA_DEFERRAL_SECONDS = 6 * 60 * 60
+MAXIMUM_IN_RUN_RETRY_SLEEP_SECONDS = 60
 
 
 class ProviderCallBudgetExceeded(RuntimeError):
@@ -126,8 +128,12 @@ def _call_with_retry(
             rate_limited = is_rate_limit_error(error)
             delay = retry_after_seconds(error, attempt, now)
             if attempt < maximum_attempts:
-                sleeper(delay)
+                # A workflow run may make a few bounded retries, but it must never
+                # sleep until the next shared-provider quota window.
+                sleeper(min(delay, MAXIMUM_IN_RUN_RETRY_SLEEP_SECONDS))
                 continue
+            if rate_limited:
+                delay = max(delay, MINIMUM_GLOBAL_QUOTA_DEFERRAL_SECONDS)
             reason = "google_trends_rate_limited" if rate_limited else f"google_trends_unavailable:{type(error).__name__}"
             return None, _retry_info(attempts=attempt, maximum=maximum_attempts, rate_limited=rate_limited, retry_seconds=delay, now=now), reason
     raise AssertionError(f"unreachable retry state: {last_error}")
