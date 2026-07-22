@@ -4,7 +4,17 @@ export type FormulaProviderConfiguration = {
   primary: FormulaProviderName;
   fallback: FormulaProviderName | "disabled";
   model: string;
+  maxOutputTokens: number;
 };
+
+export const DEFAULT_FORMULA_MAX_OUTPUT_TOKENS = 4096;
+export const MAX_FORMULA_MAX_OUTPUT_TOKENS = 8192;
+
+export function resolveFormulaMaxOutputTokens(env: NodeJS.ProcessEnv = process.env) {
+  const requested = Number(env.TREND_FORMULA_MAX_OUTPUT_TOKENS);
+  if (!Number.isFinite(requested)) return DEFAULT_FORMULA_MAX_OUTPUT_TOKENS;
+  return Math.max(DEFAULT_FORMULA_MAX_OUTPUT_TOKENS, Math.min(MAX_FORMULA_MAX_OUTPUT_TOKENS, Math.floor(requested)));
+}
 
 function providerName(value: string | undefined, label: string): FormulaProviderName {
   const normalized = value?.trim();
@@ -40,7 +50,7 @@ export function resolveFormulaProviderConfiguration(env: NodeJS.ProcessEnv = pro
     : providerName(requestedFallback, "TREND_FORMULA_TEXT_FALLBACK_PROVIDER");
   const model = validateProviderConfiguration(primary, env);
   if (fallback !== "disabled") validateProviderConfiguration(fallback, env);
-  return { primary, fallback, model };
+  return { primary, fallback, model, maxOutputTokens: resolveFormulaMaxOutputTokens(env) };
 }
 
 export function formulaProviderDiagnostic(config: FormulaProviderConfiguration) {

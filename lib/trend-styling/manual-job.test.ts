@@ -144,6 +144,7 @@ test("workflow passes validated inputs through quoted arrays and keeps public en
   assert.ok(workflow.includes("CLOUDFLARE_TEXT_MODEL: ${{ vars.CLOUDFLARE_TEXT_MODEL }}"));
   assert.ok(workflow.includes("CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"));
   assert.ok(workflow.includes("CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}"));
+  assert.ok(workflow.includes("TREND_FORMULA_MAX_OUTPUT_TOKENS: ${{ vars.TREND_FORMULA_MAX_OUTPUT_TOKENS }}"));
   assert.match(workflow, /args=\(/);
   assert.match(workflow, /"\$\{args\[@\]\}"/);
   assert.doesNotMatch(workflow, /--keyword\s+"?\$\{\{\s*inputs\.keyword/);

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { isolatedConceptId } from "./concept-identity";
 import { buildInternalFormulaCandidates } from "./formula-schema-boundary";
-import { createFormulaTextProvider, parseProviderFormulaOutput, ProviderFormulaValidationError } from "./providers";
+import { createFormulaTextProvider, parseProviderFormulaOutput, ProviderFormulaValidationError, ProviderOutputTruncatedError } from "./providers";
+import { resolveFormulaMaxOutputTokens } from "./config";
 
 const evidenceIds = [isolatedConceptId("provider evidence one"), isolatedConceptId("provider evidence two")];
 const slots = ["easy_entry", "current_uniform", "editorial_push"] as const;
@@ -72,12 +73,59 @@ test("provider output does not require review_status and trusted code adds all a
 test("Gemini and Cloudflare response envelopes normalize to the same strict provider schema", async () => {
   const creativeJson = JSON.stringify(wireOutput()); const bodies: unknown[] = [];
   const gemini = createFormulaTextProvider("gemini", { env: { GEMINI_API_KEY: "test" } as unknown as NodeJS.ProcessEnv, fetchImpl: async (_url, init) => { bodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: creativeJson }] } }] }), { status: 200 }); } });
-  const cloudflare = createFormulaTextProvider("cloudflare", { env: { CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "test" } as unknown as NodeJS.ProcessEnv, fetchImpl: async (_url, init) => { bodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify({ result: { response: creativeJson } }), { status: 200 }); } });
+  const cloudflare = createFormulaTextProvider("cloudflare", { env: { CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "test" } as unknown as NodeJS.ProcessEnv, diagnostic() {}, fetchImpl: async (_url, init) => { bodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify({ result: { response: wireOutput(), usage: { completion_tokens: 1800 }, finish_reason: "stop" } }), { status: 200 }); } });
   assert.deepEqual(await gemini.generate({ prompt: "saved evidence" }), await cloudflare.generate({ prompt: "saved evidence" }));
   assert.match(JSON.stringify(bodies[0]), /styling_instructions/);
   assert.match(JSON.stringify(bodies[1]), /styling_instructions/);
   assert.match(JSON.stringify(bodies[0]), /responseSchema/);
-  assert.match(JSON.stringify(bodies[1]), /json_object/);
+  assert.match(JSON.stringify(bodies[1]), /json_schema/);
+  assert.equal((bodies[1] as { max_tokens: number }).max_tokens, 4096);
+});
+
+test("Cloudflare bounds formula output-token configuration safely", () => {
+  assert.equal(resolveFormulaMaxOutputTokens({} as NodeJS.ProcessEnv), 4096);
+  assert.equal(resolveFormulaMaxOutputTokens({ TREND_FORMULA_MAX_OUTPUT_TOKENS: "128" } as unknown as NodeJS.ProcessEnv), 4096);
+  assert.equal(resolveFormulaMaxOutputTokens({ TREND_FORMULA_MAX_OUTPUT_TOKENS: "6144" } as unknown as NodeJS.ProcessEnv), 6144);
+  assert.equal(resolveFormulaMaxOutputTokens({ TREND_FORMULA_MAX_OUTPUT_TOKENS: "999999" } as unknown as NodeJS.ProcessEnv), 8192);
+});
+
+test("observed unterminated Cloudflare JSON triggers one full regeneration and valid second response succeeds", async () => {
+  const observed = '{"formulas":{"women":{"easy_entry":{"title":"linen formula';
+  const bodies: Array<{ prompt: string; max_tokens: number }> = []; const diagnostics: string[] = []; const urls: string[] = [];
+  const provider = createFormulaTextProvider("cloudflare", {
+    env: { CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "test", CLOUDFLARE_TEXT_MODEL: "@cf/meta/test" } as unknown as NodeJS.ProcessEnv,
+    diagnostic(line) { diagnostics.push(line); },
+    fetchImpl: async (url, init) => {
+      urls.push(String(url)); bodies.push(JSON.parse(String(init?.body)));
+      const response = bodies.length === 1 ? observed : JSON.stringify(wireOutput());
+      return new Response(JSON.stringify({ result: { response, usage: { completion_tokens: bodies.length === 1 ? 256 : 1800 } } }), { status: 200 });
+    },
+  });
+  assert.equal((await provider.generate({ prompt: "saved evidence markets and hash" })).formulas.length, 6);
+  assert.equal(bodies.length, 2);
+  assert.ok(bodies.every(({ max_tokens }) => max_tokens === 4096));
+  assert.match(bodies[1].prompt, /same saved evidence/);
+  assert.doesNotMatch(bodies[1].prompt, /linen formula/);
+  assert.ok(urls.every((url) => url.includes("api.cloudflare.com")));
+  assert.match(diagnostics[0], /json_parse_category=provider_output_truncated/);
+  assert.match(diagnostics[0], /response_chars=58/);
+  assert.match(diagnostics[1], /json_parse_category=valid/);
+});
+
+test("Cloudflare length finish reason is truncated and a second truncation fails closed", async () => {
+  let calls = 0; const diagnostics: string[] = [];
+  const provider = createFormulaTextProvider("cloudflare", {
+    env: { CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "test", CLOUDFLARE_TEXT_MODEL: "@cf/meta/test", TREND_FORMULA_MAX_OUTPUT_TOKENS: "5000" } as unknown as NodeJS.ProcessEnv,
+    diagnostic(line) { diagnostics.push(line); },
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ result: { response: '{"formulas":', usage: { completion_tokens: 5000 }, finish_reason: "length" } }), { status: 200 });
+    },
+  });
+  await assert.rejects(provider.generate({ prompt: "saved evidence" }), ProviderOutputTruncatedError);
+  assert.equal(calls, 2);
+  assert.equal(diagnostics.length, 2);
+  assert.ok(diagnostics.every((line) => /output_tokens=5000 max_tokens=5000 finish_reason=length json_parse_category=provider_output_truncated/.test(line)));
 });
 
 test("one bounded repair can correct valid JSON without any research calls", async () => {
@@ -97,7 +145,7 @@ test("one bounded repair can correct valid JSON without any research calls", asy
 
 test("a second schema-invalid response fails closed after exactly one repair", async () => {
   let calls = 0;
-  const provider = createFormulaTextProvider("cloudflare", { env: { CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "test" } as unknown as NodeJS.ProcessEnv, fetchImpl: async () => {
+  const provider = createFormulaTextProvider("cloudflare", { env: { CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "test" } as unknown as NodeJS.ProcessEnv, diagnostic() {}, fetchImpl: async () => {
     calls += 1;
     return new Response(JSON.stringify({ result: { response: JSON.stringify(observedRejectedShape) } }), { status: 200 });
   } });

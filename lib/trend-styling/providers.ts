@@ -1,6 +1,6 @@
 import { ZodError } from "zod";
 import { providerFormulaOutputSchema, type ProviderFormulaOutput } from "./schema";
-import { resolveFormulaProviderConfiguration, type FormulaProviderConfiguration, type FormulaProviderName } from "./config";
+import { resolveFormulaMaxOutputTokens, resolveFormulaProviderConfiguration, type FormulaProviderConfiguration, type FormulaProviderName } from "./config";
 
 export type FormulaGenerationRequest = { prompt: string };
 export interface FormulaTextProvider { readonly name: "gemini" | "cloudflare" | "ollama"; generate(request: FormulaGenerationRequest): Promise<ProviderFormulaOutput>; }
@@ -17,6 +17,22 @@ export class ProviderFormulaValidationError extends Error {
   constructor(readonly issuePaths: string[]) {
     super(`Formula provider response failed strict validation at: ${issuePaths.join(", ")}`);
     this.name = "ProviderFormulaValidationError";
+  }
+}
+
+export class ProviderOutputTruncatedError extends Error {
+  readonly errorCategory = "provider_output_truncated" as const;
+  constructor() {
+    super("provider_output_truncated");
+    this.name = "ProviderOutputTruncatedError";
+  }
+}
+
+export class ProviderOutputInvalidJsonError extends Error {
+  readonly errorCategory = "provider_output_invalid_json" as const;
+  constructor() {
+    super("provider_output_invalid_json");
+    this.name = "ProviderOutputInvalidJsonError";
   }
 }
 
@@ -55,6 +71,17 @@ export const providerFormulaResponseSchema = {
   },
 } as const;
 
+function lowerCaseJsonSchemaTypes(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(lowerCaseJsonSchemaTypes);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [
+    key,
+    key === "type" && typeof child === "string" ? child.toLowerCase() : lowerCaseJsonSchemaTypes(child),
+  ]));
+}
+
+export const cloudflareFormulaResponseSchema = lowerCaseJsonSchemaTypes(providerFormulaResponseSchema);
+
 export const PROVIDER_FORMULA_SCHEMA_PROMPT = `Return one JSON object with exactly one root key, "formulas". "formulas" must be an object with exactly two keys, "women" and "men". Each audience must be an object with exactly three keys: "easy_entry", "current_uniform", and "editorial_push". Trusted application code derives audience and formula_slot from these six keys, so never include audience or formula_slot inside a formula. Each formula may contain only: title, items, footwear, accessories, styling_instructions, occasion, season, climate, market_rationale, evidence_based_rationale, evidence_ids, confidence. Each item may contain only: role, garment, silhouette, colour, material, styling_instruction. Never return formula_type, IDs, hashes, owner identity, requesting-market authority, review or approval state, timestamps, publication state, or any other root keys.`;
 
 function cleanJsonText(text: string) {
@@ -87,6 +114,104 @@ async function generateWithOneRepair(call: (prompt: string) => Promise<string>, 
   }
 }
 
+type CloudflareFormulaResponse = {
+  text: string;
+  httpStatus: number;
+  outputTokens: number | null;
+  finishReason: string | null;
+};
+
+function numberValue(...values: unknown[]) {
+  const value = values.find((item) => typeof item === "number" && Number.isFinite(item));
+  return typeof value === "number" ? value : null;
+}
+
+function stringValue(...values: unknown[]) {
+  const value = values.find((item) => typeof item === "string" && item.trim());
+  return typeof value === "string" ? value.trim().slice(0, 60).replace(/[^a-zA-Z0-9_.:/@-]/g, "_") : null;
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function incompleteJsonError(error: SyntaxError) {
+  return /unterminated|unexpected end|end of json input/i.test(error.message);
+}
+
+function lengthFinishReason(finishReason: string | null) {
+  return Boolean(finishReason && /length|max[_ -]?tokens|token[_ -]?limit/i.test(finishReason));
+}
+
+function cloudflareDiagnostic(input: {
+  model: string;
+  httpStatus: number;
+  text: string;
+  outputTokens: number | null;
+  maxTokens: number;
+  finishReason: string | null;
+  parseCategory: string;
+}) {
+  const bytes = new TextEncoder().encode(input.text).byteLength;
+  return `formula_provider=cloudflare formula_model=${stringValue(input.model) || "unknown"} http_status=${input.httpStatus} response_bytes=${bytes} response_chars=${input.text.length} output_tokens=${input.outputTokens ?? "unknown"} max_tokens=${input.maxTokens} finish_reason=${stringValue(input.finishReason) || "unknown"} json_parse_category=${input.parseCategory}`;
+}
+
+function parseCloudflareFormulaResponse(
+  response: CloudflareFormulaResponse,
+  model: string,
+  maxTokens: number,
+  diagnostic: (line: string) => void,
+) {
+  if (lengthFinishReason(response.finishReason)) {
+    diagnostic(cloudflareDiagnostic({ model, ...response, maxTokens, parseCategory: "provider_output_truncated" }));
+    throw new ProviderOutputTruncatedError();
+  }
+  try {
+    const parsed = parseProviderFormulaOutput(response.text);
+    diagnostic(cloudflareDiagnostic({ model, ...response, maxTokens, parseCategory: "valid" }));
+    return parsed;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      const truncated = incompleteJsonError(error);
+      diagnostic(cloudflareDiagnostic({ model, ...response, maxTokens, parseCategory: truncated ? "provider_output_truncated" : "provider_output_invalid_json" }));
+      if (truncated) throw new ProviderOutputTruncatedError();
+      throw new ProviderOutputInvalidJsonError();
+    }
+    diagnostic(cloudflareDiagnostic({ model, ...response, maxTokens, parseCategory: "schema_invalid" }));
+    throw error;
+  }
+}
+
+async function generateCloudflareWithOneRetry(input: {
+  call: (prompt: string) => Promise<CloudflareFormulaResponse>;
+  prompt: string;
+  model: string;
+  maxTokens: number;
+  diagnostic: (line: string) => void;
+}) {
+  const fullPrompt = `${input.prompt}\n\n${PROVIDER_FORMULA_SCHEMA_PROMPT}`;
+  let first: CloudflareFormulaResponse;
+  try {
+    first = await input.call(fullPrompt);
+  } catch (error) {
+    if (!(error instanceof ProviderOutputInvalidJsonError)) throw error;
+    const second = await input.call(`${fullPrompt}\nRegenerate the complete JSON object from the same saved evidence. Start again from the opening brace and do not append to or quote any previous output.`);
+    return parseCloudflareFormulaResponse(second, input.model, input.maxTokens, input.diagnostic);
+  }
+  try {
+    return parseCloudflareFormulaResponse(first, input.model, input.maxTokens, input.diagnostic);
+  } catch (error) {
+    const retryPrompt = error instanceof ProviderFormulaValidationError
+      ? repairPrompt(input.prompt, first.text, error)
+      : error instanceof ProviderOutputTruncatedError || error instanceof ProviderOutputInvalidJsonError
+        ? `${fullPrompt}\nRegenerate the complete JSON object from the same saved evidence. Start again from the opening brace and do not append to or quote any previous output.`
+        : null;
+    if (!retryPrompt) throw error;
+    const second = await input.call(retryPrompt);
+    return parseCloudflareFormulaResponse(second, input.model, input.maxTokens, input.diagnostic);
+  }
+}
+
 function retryAfterSeconds(response: Response) {
   const raw = response.headers.get("retry-after");
   const seconds = Number(raw);
@@ -100,10 +225,11 @@ function retryAfterSeconds(response: Response) {
 
 export function createFormulaTextProvider(
   name: FormulaProviderName,
-  options: { env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch } = {},
+  options: { env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch; diagnostic?: (line: string) => void; maxOutputTokens?: number } = {},
 ): FormulaTextProvider {
   const env = options.env || process.env;
   const fetchImpl = options.fetchImpl || fetch;
+  const diagnostic = options.diagnostic || ((line: string) => console.log(line));
   if (name === "ollama") return { name, async generate({ prompt }) {
     const endpoint = env.OLLAMA_TEXT_ENDPOINT; if (!endpoint) throw new Error("OLLAMA_TEXT_ENDPOINT is required");
     return generateWithOneRepair(async (requestPrompt) => {
@@ -117,12 +243,35 @@ export function createFormulaTextProvider(
     const account = env.CLOUDFLARE_ACCOUNT_ID, token = env.CLOUDFLARE_API_TOKEN;
     if (!account || !token) throw new Error("Cloudflare text configuration is required");
     const model = env.CLOUDFLARE_TEXT_MODEL || "@cf/meta/llama-3.1-8b-instruct";
-    return generateWithOneRepair(async (requestPrompt) => {
-      const response = await fetchImpl(`https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/${model}`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ prompt: requestPrompt, response_format: { type: "json_object" } }) });
-      if (response.status === 429) throw new FormulaProviderQuotaError(name, retryAfterSeconds(response));
-      if (!response.ok) throw new Error(`Cloudflare text failed (${response.status})`);
-      return (await response.json()).result?.response || "";
-    }, prompt);
+    const maxTokens = options.maxOutputTokens ?? resolveFormulaMaxOutputTokens(env);
+    return generateCloudflareWithOneRetry({ prompt, model, maxTokens, diagnostic, call: async (requestPrompt) => {
+      const response = await fetchImpl(`https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/${model}`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ prompt: requestPrompt, max_tokens: maxTokens, response_format: { type: "json_schema", json_schema: cloudflareFormulaResponseSchema } }) });
+      if (response.status === 429) {
+        diagnostic(cloudflareDiagnostic({ model, httpStatus: response.status, text: "", outputTokens: null, maxTokens, finishReason: null, parseCategory: "quota_exhausted" }));
+        throw new FormulaProviderQuotaError(name, retryAfterSeconds(response));
+      }
+      if (!response.ok) {
+        diagnostic(cloudflareDiagnostic({ model, httpStatus: response.status, text: "", outputTokens: null, maxTokens, finishReason: null, parseCategory: "http_error" }));
+        throw new Error(`Cloudflare text failed (${response.status})`);
+      }
+      let payload: Record<string, unknown>;
+      try {
+        payload = record(await response.json());
+      } catch {
+        diagnostic(cloudflareDiagnostic({ model, httpStatus: response.status, text: "", outputTokens: null, maxTokens, finishReason: null, parseCategory: "invalid_wrapper" }));
+        throw new ProviderOutputInvalidJsonError();
+      }
+      const result = record(payload.result);
+      const usage = record(result.usage || payload.usage);
+      const rawResponse = result.response;
+      const text = typeof rawResponse === "string" ? rawResponse : rawResponse && typeof rawResponse === "object" ? JSON.stringify(rawResponse) : "";
+      return {
+        text,
+        httpStatus: response.status,
+        outputTokens: numberValue(usage.completion_tokens, usage.output_tokens, usage.generated_tokens),
+        finishReason: stringValue(result.finish_reason, result.stop_reason, usage.finish_reason, payload.finish_reason),
+      };
+    } });
   }};
   if (name !== "gemini") throw new Error(`Unsupported formula provider: ${name}`);
   return { name: "gemini", async generate({ prompt }) {
@@ -141,10 +290,11 @@ export function createConfiguredFormulaTextProvider(
   env: NodeJS.ProcessEnv = process.env,
   fetchImpl?: typeof fetch,
   configuration: FormulaProviderConfiguration = resolveFormulaProviderConfiguration(env),
+  diagnostic?: (line: string) => void,
 ): FormulaTextProvider {
-  const primary = createFormulaTextProvider(configuration.primary, { env, fetchImpl });
+  const primary = createFormulaTextProvider(configuration.primary, { env, fetchImpl, diagnostic, maxOutputTokens: configuration.maxOutputTokens });
   if (configuration.fallback === "disabled") return primary;
-  const fallback = createFormulaTextProvider(configuration.fallback, { env, fetchImpl });
+  const fallback = createFormulaTextProvider(configuration.fallback, { env, fetchImpl, diagnostic, maxOutputTokens: configuration.maxOutputTokens });
   return {
     name: primary.name,
     async generate(request) {

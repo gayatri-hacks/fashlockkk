@@ -4,7 +4,7 @@ import test from "node:test";
 import { stageAndAtomicallyApproveFormulaSet, type FormulaPublicationStore } from "./atomic-formula-publication";
 import { runFormulaStateMachine, type FormulaReadyJob, type FormulaStateStore } from "./formula-state-machine";
 import { LINEN_FORMULA_RESUME_TARGET, runLinenFormulaResume } from "./linen-formula-resume";
-import { createConfiguredFormulaTextProvider, createFormulaTextProvider, FormulaProviderQuotaError, ProviderFormulaValidationError } from "./providers";
+import { createConfiguredFormulaTextProvider, createFormulaTextProvider, FormulaProviderQuotaError, ProviderFormulaValidationError, ProviderOutputTruncatedError } from "./providers";
 import { computeFormulaHash, type ProviderFormulaOutput, type TrendOutfitFormula, type TrendStyleEvidence } from "./schema";
 import { isolatedConceptId } from "./concept-identity";
 import { formulaProviderDiagnostic, resolveFormulaProviderConfiguration } from "./config";
@@ -139,6 +139,23 @@ test("two schema-invalid provider responses return to evidence_ready without for
   assert.deepEqual(events, ["begin", "retain"]);
 });
 
+test("two truncated Cloudflare responses return to evidence_ready without partial formulas, research, or images", async () => {
+  const events: string[] = []; const urls: string[] = [];
+  const provider = createFormulaTextProvider("cloudflare", {
+    env: { CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "test", CLOUDFLARE_TEXT_MODEL: "@cf/meta/test" } as unknown as NodeJS.ProcessEnv,
+    diagnostic() {},
+    fetchImpl: async (url) => {
+      urls.push(String(url));
+      return new Response(JSON.stringify({ result: { response: '{"formulas":{"women":{"easy_entry":{"title":"unterminated', usage: { completion_tokens: 4096 }, finish_reason: "max_tokens" } }), { status: 200 });
+    },
+  });
+  await assert.rejects(runFormulaStateMachine({ job, evidence, prompt: "saved evidence and markets", enqueueImages: true, now, provider, store: memoryStore(events) }), ProviderOutputTruncatedError);
+  assert.equal(job.attempts, 2);
+  assert.equal(urls.length, 2);
+  assert.ok(urls.every((url) => url.includes("api.cloudflare.com")));
+  assert.deepEqual(events, ["begin", "retain"]);
+});
+
 test("formula fallback is disabled by default and configured Cloudflare receives the exact Gemini prompt", async () => {
   const disabledCalls: string[] = [];
   const disabled = createConfiguredFormulaTextProvider({ TREND_FORMULA_TEXT_PROVIDER: "gemini", GEMINI_API_KEY: "key" } as unknown as NodeJS.ProcessEnv, async (url) => { disabledCalls.push(String(url)); return new Response("quota", { status: 429 }); });
@@ -162,7 +179,7 @@ test("Cloudflare primary disables duplicate fallback and makes zero Gemini calls
     CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "token", CLOUDFLARE_TEXT_MODEL: "@cf/meta/test",
   } as unknown as NodeJS.ProcessEnv;
   const configuration = resolveFormulaProviderConfiguration(env);
-  assert.deepEqual(configuration, { primary: "cloudflare", fallback: "disabled", model: "@cf/meta/test" });
+  assert.deepEqual(configuration, { primary: "cloudflare", fallback: "disabled", model: "@cf/meta/test", maxOutputTokens: 4096 });
   assert.equal(formulaProviderDiagnostic(configuration), "formula_provider=cloudflare formula_fallback=disabled formula_model=@cf/meta/test");
   const urls: string[] = [];
   const provider = createConfiguredFormulaTextProvider(env, async (url) => {
