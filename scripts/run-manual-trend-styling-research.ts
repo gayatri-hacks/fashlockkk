@@ -15,6 +15,7 @@ import {
 import { MANUAL_STYLING_STAGES, MANUAL_STYLING_WORKFLOW_NAME } from "../lib/trend-styling/manual-workflow";
 import type { StylingMarketPlan } from "../lib/trend-styling/market-selection";
 import { createConfiguredFormulaTextProvider } from "../lib/trend-styling/providers";
+import { formulaProviderDiagnostic, resolveFormulaProviderConfiguration } from "../lib/trend-styling/config";
 import { createConfiguredMarketInterestProvider, createSupabaseResearchStore, runResearchWorker } from "../lib/trend-styling/research-worker";
 import { safeResearchDiagnostic } from "../lib/trend-styling/research-diagnostics";
 import type { TrendOutfitFormula, TrendStyleEvidence } from "../lib/trend-styling/schema";
@@ -33,6 +34,9 @@ async function main() {
     return;
   }
   if (!enabled) throw new Error("Manual styling execution is disabled by TREND_STYLING_INTELLIGENCE_ENABLED");
+  const formulaProviderConfiguration = resolveFormulaProviderConfiguration();
+  const formulaProvider = createConfiguredFormulaTextProvider(process.env, undefined, formulaProviderConfiguration);
+  console.log(formulaProviderDiagnostic(formulaProviderConfiguration));
   requireManualServiceRole();
   await prepareManualStylingJob(options, options.createJob && options.confirmManualJobCreation ? createSupabaseManualJobStore() : undefined);
   const db = getSupabaseClient();
@@ -120,7 +124,7 @@ async function main() {
       if (error) throw error;
     },
   };
-  const result = await runFormulaStateMachine({ job: formulaJob, evidence, prompt, provider: createConfiguredFormulaTextProvider(), store, enqueueImages });
+  const result = await runFormulaStateMachine({ job: formulaJob, evidence, prompt, provider: formulaProvider, store, enqueueImages });
   console.log(JSON.stringify({ workflow: MANUAL_STYLING_WORKFLOW_NAME, status: result.status, canonicalKeyword: target.canonicalKeyword, conceptId: target.conceptId, formulaCount: "formulas" in result ? result.formulas?.length || 0 : 0, imageEnqueueRequested: enqueueImages }));
 }
 

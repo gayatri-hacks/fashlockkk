@@ -139,6 +139,11 @@ test("workflow passes validated inputs through quoted arrays and keeps public en
     assert.match(workflow, new RegExp(`^      ${input}:`, "m"));
   }
   assert.match(workflow, /TREND_SEARCH_RESEARCH_ENQUEUE_ENABLED: "false"/);
+  assert.ok(workflow.includes("TREND_FORMULA_TEXT_PROVIDER: ${{ vars.TREND_FORMULA_TEXT_PROVIDER }}"));
+  assert.ok(workflow.includes("TREND_FORMULA_TEXT_FALLBACK_PROVIDER: ${{ vars.TREND_FORMULA_TEXT_FALLBACK_PROVIDER }}"));
+  assert.ok(workflow.includes("CLOUDFLARE_TEXT_MODEL: ${{ vars.CLOUDFLARE_TEXT_MODEL }}"));
+  assert.ok(workflow.includes("CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"));
+  assert.ok(workflow.includes("CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}"));
   assert.match(workflow, /args=\(/);
   assert.match(workflow, /"\$\{args\[@\]\}"/);
   assert.doesNotMatch(workflow, /--keyword\s+"?\$\{\{\s*inputs\.keyword/);

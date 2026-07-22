@@ -7,6 +7,7 @@ import { LINEN_FORMULA_RESUME_TARGET, runLinenFormulaResume } from "./linen-form
 import { createConfiguredFormulaTextProvider, createFormulaTextProvider, FormulaProviderQuotaError, ProviderFormulaValidationError } from "./providers";
 import { computeFormulaHash, type ProviderFormulaOutput, type TrendOutfitFormula, type TrendStyleEvidence } from "./schema";
 import { isolatedConceptId } from "./concept-identity";
+import { formulaProviderDiagnostic, resolveFormulaProviderConfiguration } from "./config";
 
 const now = new Date("2026-07-20T00:00:00.000Z");
 const conceptId = LINEN_FORMULA_RESUME_TARGET.conceptId;
@@ -140,19 +141,58 @@ test("two schema-invalid provider responses return to evidence_ready without for
 
 test("formula fallback is disabled by default and configured Cloudflare receives the exact Gemini prompt", async () => {
   const disabledCalls: string[] = [];
-  const disabled = createConfiguredFormulaTextProvider({ GEMINI_API_KEY: "key" } as unknown as NodeJS.ProcessEnv, async (url) => { disabledCalls.push(String(url)); return new Response("quota", { status: 429 }); });
+  const disabled = createConfiguredFormulaTextProvider({ TREND_FORMULA_TEXT_PROVIDER: "gemini", GEMINI_API_KEY: "key" } as unknown as NodeJS.ProcessEnv, async (url) => { disabledCalls.push(String(url)); return new Response("quota", { status: 429 }); });
   await assert.rejects(disabled.generate({ prompt: "exact saved evidence" }), FormulaProviderQuotaError);
   assert.equal(disabledCalls.length, 1);
 
   const bodies: string[] = [];
   let calls = 0;
-  const configured = createConfiguredFormulaTextProvider({ GEMINI_API_KEY: "key", TREND_FORMULA_TEXT_FALLBACK_PROVIDER: "cloudflare", CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "token" } as unknown as NodeJS.ProcessEnv, async (_url, init) => {
+  const configured = createConfiguredFormulaTextProvider({ TREND_FORMULA_TEXT_PROVIDER: "gemini", GEMINI_API_KEY: "key", TREND_FORMULA_TEXT_FALLBACK_PROVIDER: "cloudflare", CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "token", CLOUDFLARE_TEXT_MODEL: "@cf/test/formula" } as unknown as NodeJS.ProcessEnv, async (_url, init) => {
     bodies.push(String(init?.body)); calls += 1;
     return calls === 1 ? new Response("quota", { status: 429 }) : new Response(JSON.stringify({ result: { response: JSON.stringify(providerWireOutput()) } }), { status: 200 });
   });
   assert.deepEqual(await configured.generate({ prompt: "exact saved evidence" }), providerOutput());
   assert.equal(calls, 2);
   assert.ok(bodies.every((body) => body.includes("exact saved evidence")));
+});
+
+test("Cloudflare primary disables duplicate fallback and makes zero Gemini calls", async () => {
+  const env = {
+    TREND_FORMULA_TEXT_PROVIDER: "cloudflare", TREND_FORMULA_TEXT_FALLBACK_PROVIDER: "cloudflare",
+    CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "token", CLOUDFLARE_TEXT_MODEL: "@cf/meta/test",
+  } as unknown as NodeJS.ProcessEnv;
+  const configuration = resolveFormulaProviderConfiguration(env);
+  assert.deepEqual(configuration, { primary: "cloudflare", fallback: "disabled", model: "@cf/meta/test" });
+  assert.equal(formulaProviderDiagnostic(configuration), "formula_provider=cloudflare formula_fallback=disabled formula_model=@cf/meta/test");
+  const urls: string[] = [];
+  const provider = createConfiguredFormulaTextProvider(env, async (url) => {
+    urls.push(String(url));
+    return new Response(JSON.stringify({ result: { response: JSON.stringify(providerWireOutput()) } }), { status: 200 });
+  }, configuration);
+  assert.equal(provider.name, "cloudflare");
+  assert.equal((await provider.generate({ prompt: "saved evidence" })).formulas.length, 6);
+  assert.equal(urls.length, 1);
+  assert.ok(urls[0].includes("api.cloudflare.com"));
+  assert.equal(urls.some((url) => url.includes("generativelanguage.googleapis.com")), false);
+});
+
+test("missing Cloudflare configuration fails before claim and preserves evidence-ready state", async () => {
+  const state = { status: "evidence_ready", attempts: 2, formulaCount: 0 };
+  let claimCalls = 0, searchCalls = 0, imageCalls = 0, fetchCalls = 0;
+  assert.throws(() => {
+    createConfiguredFormulaTextProvider({
+      TREND_FORMULA_TEXT_PROVIDER: "cloudflare", TREND_FORMULA_TEXT_FALLBACK_PROVIDER: "cloudflare",
+      CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "token",
+    } as unknown as NodeJS.ProcessEnv, async () => { fetchCalls += 1; return new Response(); });
+    claimCalls += 1;
+    searchCalls += 1;
+    imageCalls += 1;
+  }, /CLOUDFLARE_TEXT_MODEL is required/);
+  assert.deepEqual(state, { status: "evidence_ready", attempts: 2, formulaCount: 0 });
+  assert.deepEqual({ claimCalls, searchCalls, imageCalls, fetchCalls }, { claimCalls: 0, searchCalls: 0, imageCalls: 0, fetchCalls: 0 });
+  const script = await readFile(new URL("../../scripts/run-manual-trend-styling-research.ts", import.meta.url), "utf8");
+  assert.ok(script.indexOf("resolveFormulaProviderConfiguration()") < script.indexOf("requireManualServiceRole()"));
+  assert.ok(script.indexOf("resolveFormulaProviderConfiguration()") < script.lastIndexOf("prepareManualStylingJob(options"));
 });
 
 test("exact linen false-completed state has dry-run-first hard-bound formula-only resume", async () => {

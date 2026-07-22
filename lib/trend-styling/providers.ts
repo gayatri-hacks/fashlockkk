@@ -1,5 +1,6 @@
 import { ZodError } from "zod";
 import { providerFormulaOutputSchema, type ProviderFormulaOutput } from "./schema";
+import { resolveFormulaProviderConfiguration, type FormulaProviderConfiguration, type FormulaProviderName } from "./config";
 
 export type FormulaGenerationRequest = { prompt: string };
 export interface FormulaTextProvider { readonly name: "gemini" | "cloudflare" | "ollama"; generate(request: FormulaGenerationRequest): Promise<ProviderFormulaOutput>; }
@@ -98,7 +99,7 @@ function retryAfterSeconds(response: Response) {
 }
 
 export function createFormulaTextProvider(
-  name = process.env.TREND_FORMULA_TEXT_PROVIDER || "gemini",
+  name: FormulaProviderName,
   options: { env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch } = {},
 ): FormulaTextProvider {
   const env = options.env || process.env;
@@ -139,12 +140,11 @@ export function createFormulaTextProvider(
 export function createConfiguredFormulaTextProvider(
   env: NodeJS.ProcessEnv = process.env,
   fetchImpl?: typeof fetch,
+  configuration: FormulaProviderConfiguration = resolveFormulaProviderConfiguration(env),
 ): FormulaTextProvider {
-  const primary = createFormulaTextProvider(env.TREND_FORMULA_TEXT_PROVIDER || "gemini", { env, fetchImpl });
-  const fallbackName = env.TREND_FORMULA_TEXT_FALLBACK_PROVIDER;
-  if (!fallbackName || fallbackName === "disabled") return primary;
-  const fallback = createFormulaTextProvider(fallbackName, { env, fetchImpl });
-  if (fallback.name === primary.name) throw new Error("Formula fallback provider must differ from primary");
+  const primary = createFormulaTextProvider(configuration.primary, { env, fetchImpl });
+  if (configuration.fallback === "disabled") return primary;
+  const fallback = createFormulaTextProvider(configuration.fallback, { env, fetchImpl });
   return {
     name: primary.name,
     async generate(request) {
