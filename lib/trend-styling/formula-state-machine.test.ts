@@ -8,6 +8,8 @@ import { createConfiguredFormulaTextProvider, createFormulaTextProvider, Formula
 import { computeFormulaHash, type ProviderFormulaOutput, type TrendOutfitFormula, type TrendStyleEvidence } from "./schema";
 import { isolatedConceptId } from "./concept-identity";
 import { formulaProviderDiagnostic, resolveFormulaProviderConfiguration } from "./config";
+import { buildEvidenceGroundedFormulaPrompt } from "./formula-generation";
+import { SUPPORTED_TREND_REGIONS } from "../trends/config";
 
 const now = new Date("2026-07-20T00:00:00.000Z");
 const conceptId = LINEN_FORMULA_RESUME_TARGET.conceptId;
@@ -81,6 +83,38 @@ test("evidence_ready retry loads saved evidence and makes zero Serper or pytrend
   assert.match(savedBranch, /trend_style_evidence/);
   assert.doesNotMatch(savedBranch, /runResearchWorker|createStylingEvidenceSearchProvider|createConfiguredMarketInterestProvider/);
   assert.match(script, /buildEvidenceGroundedFormulaPrompt/);
+});
+
+test("formula prompt states the semantic rules enforced after generation", () => {
+  const supportedMarketCodes = SUPPORTED_TREND_REGIONS.map(({ code }) => code);
+  const prompt = buildEvidenceGroundedFormulaPrompt({
+    conceptId,
+    canonicalKeyword: "linen",
+    season: "current",
+    requestingMarket: "IN",
+    marketPlan: {
+      evaluatedMarkets: supportedMarketCodes,
+      strongestMarkets: ["IN"],
+      researchMarkets: ["IN"],
+      insufficientMarkets: supportedMarketCodes.filter((market) => market !== "IN"),
+      selectedReasons: {},
+    },
+    evidence,
+    evidenceHash,
+    now,
+  });
+  assert.match(prompt, /at least two supplied evidence_ids for its own audience/);
+  assert.match(prompt, /at least two different source_domain values/);
+  assert.match(prompt, /no two slots may share 75% or more of their garment-name tokens/);
+  assert.match(prompt, /Never invent, alter or duplicate an evidence ID/);
+  assert.match(prompt, /never use vague garment names/);
+  assert.match(prompt, /never use generic claims/);
+});
+
+test("manual formula CLI fails the workflow when semantic validation rejects a batch", async () => {
+  const script = await readFile(new URL("../../scripts/run-manual-trend-styling-research.ts", import.meta.url), "utf8");
+  assert.match(script, /result\.status === "invalid_formulas"/);
+  assert.match(script, /throw new Error\(`Formula batch rejected:/);
 });
 
 test("Gemini 429 defers formula work without consuming the research attempt or enqueueing", async () => {
