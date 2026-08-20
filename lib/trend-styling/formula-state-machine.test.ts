@@ -135,11 +135,41 @@ test("valid six-formula completion is approval-gated and enqueue_images=false en
   assert.deepEqual(events, ["begin", "approve_complete"]);
 });
 
+test("one bounded semantic repair can fix duplicated formula slots without new research", async () => {
+  const events: string[] = [];
+  const prompts: string[] = [];
+  const invalid = providerOutput();
+  invalid.formulas[4].items = invalid.formulas[3].items;
+  const result = await runFormulaStateMachine({
+    job,
+    evidence,
+    prompt: "saved evidence and market plan",
+    enqueueImages: false,
+    now,
+    provider: {
+      name: "gemini",
+      async generate({ prompt }) {
+        prompts.push(prompt);
+        return prompts.length === 1 ? invalid : providerOutput();
+      },
+    },
+    store: memoryStore(events),
+  });
+  assert.equal(result.status, "completed");
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /previous complete formula batch failed application validation/i);
+  assert.match(prompts[1], /substantially duplicated/);
+  assert.match(prompts[1], /saved evidence and market plan/);
+  assert.deepEqual(events, ["begin", "approve_complete"]);
+});
+
 test("partial formula sets retain evidence_ready and cannot invoke atomic completion", async () => {
   const events: string[] = [];
+  let providerCalls = 0;
   const result = await runFormulaStateMachine({ job, evidence, prompt: "saved evidence", enqueueImages: false, now,
-    provider: { name: "gemini", async generate() { return { formulas: providerOutput().formulas.slice(0, 5) } as ProviderFormulaOutput; } }, store: memoryStore(events) });
+    provider: { name: "gemini", async generate() { providerCalls += 1; return { formulas: providerOutput().formulas.slice(0, 5) } as ProviderFormulaOutput; } }, store: memoryStore(events) });
   assert.equal(result.status, "invalid_formulas");
+  assert.equal(providerCalls, 2);
   assert.deepEqual(events, ["begin", "retain"]);
   const publication: FormulaPublicationStore = { async stage() { events.push("stage"); }, async approveAndComplete() { events.push("rpc"); }, async readApproved() { return []; } };
   await assert.rejects(stageAndAtomicallyApproveFormulaSet(formulas().slice(0, 5), { jobId: job.id, conceptId, store: publication }), /Exactly six/);
