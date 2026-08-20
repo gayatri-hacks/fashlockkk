@@ -126,6 +126,9 @@ async function main() {
   };
   const result = await runFormulaStateMachine({ job: formulaJob, evidence, prompt, provider: formulaProvider, store, enqueueImages });
   console.log(JSON.stringify({ workflow: MANUAL_STYLING_WORKFLOW_NAME, status: result.status, canonicalKeyword: target.canonicalKeyword, conceptId: target.conceptId, formulaCount: "formulas" in result ? result.formulas?.length || 0 : 0, imageEnqueueRequested: enqueueImages }));
+  if (result.status === "invalid_formulas") {
+    throw new Error(`Formula batch rejected: ${result.errors.join("; ").slice(0, 1_000)}`);
+  }
 }
 
 main().catch((error) => {
