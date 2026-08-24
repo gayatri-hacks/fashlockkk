@@ -11,6 +11,7 @@ __pycache__
 dist
 coverage
 *.sqlite
+eng.traineddata
 scraper/.venv
 scraper/*debug*.html
 scraper/logs/

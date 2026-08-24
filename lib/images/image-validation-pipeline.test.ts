@@ -991,26 +991,27 @@ test("Cloudflare smoke test script does not import Supabase or production queue 
   assert.equal(source.includes("createImageDefectValidator"), true);
 });
 
-test("Cloudflare quality calibration is manual-only, zero-Supabase and limited to oversized and layering", () => {
+test("Cloudflare quality calibration is manual-only, zero-Supabase and layering-only", () => {
   const source = readFileSync("scripts/cloudflare-image-quality-calibration.ts", "utf8");
   const workflow = readFileSync(".github/workflows/cloudflare-image-quality-calibration.yml", "utf8");
 
   assert.equal(source.includes("@supabase/supabase-js"), false);
   assert.equal(source.includes("image_generation_jobs"), false);
   assert.equal(source.includes("claim_next_image_generation_job"), false);
-  assert.equal(source.includes('DEFAULT_CALIBRATION_KEYWORDS = ["oversized", "layering"]'), true);
-  assert.equal(source.includes("DEFAULT_MAX_TEMPORARY_IMAGES = 2"), true);
+  assert.equal(source.includes('DEFAULT_CALIBRATION_KEYWORDS = ["layering"]'), true);
+  assert.equal(source.includes("MANUAL_CALIBRATION_MAX_CANDIDATES"), true);
   assert.equal(source.includes("CALIBRATION_MAX_TEMPORARY_IMAGES"), true);
-  assert.equal(source.includes("candidateCount: 1"), true);
-  assert.match(source, /oversized/);
-  assert.match(source, /floral/);
-  assert.match(source, /leather/);
+  assert.equal(source.includes("runManualCalibrationCandidateSelection"), true);
+  assert.equal(source.includes("rankTrendConceptCandidates"), false);
   assert.match(source, /layering/);
-  assert.match(source, /kurta/);
+  assert.equal(source.includes("@supabase"), false);
+  assert.equal(source.includes("storage.from"), false);
+  assert.equal(source.includes(".upload("), false);
+  assert.equal(source.includes("complete_image_generation_job"), false);
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /keywords/);
-  assert.match(workflow, /default: oversized,layering/);
-  assert.match(workflow, /CALIBRATION_MAX_TEMPORARY_IMAGES: 2/);
+  assert.match(workflow, /default: layering/);
+  assert.match(workflow, /CALIBRATION_MAX_TEMPORARY_IMAGES: 3/);
   assert.equal(workflow.includes("schedule:"), false);
   assert.equal(workflow.includes("ENABLE_CLOUD_IMAGE_WORKER"), false);
 });

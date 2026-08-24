@@ -8,12 +8,19 @@ import { createImageDefectValidator } from "../lib/images/image-defect-validator
 import { createImageGenerator, RetryableImageGenerationError } from "../lib/images/image-generator";
 import { analyzeImagePixels, createOcrProvider, disposeOcrProvider } from "../lib/images/image-pixel-analysis";
 import { createImageSemanticValidator } from "../lib/images/image-semantic-validator";
+import {
+  MANUAL_CALIBRATION_MAX_CANDIDATES,
+  runManualCalibrationCandidateSelection,
+} from "../lib/images/manual-calibration-candidate-selection";
 import { buildTrendImageBrief } from "../lib/images/trend-image-brief";
-import { candidateFactsFromAnalysis, validateTrendConceptCandidate } from "../lib/images/trend-concept-validation";
+import {
+  candidateFactsFromAnalysis,
+  validateTrendConceptCandidate,
+  type TrendConceptValidationResult,
+} from "../lib/images/trend-concept-validation";
 
-const DEFAULT_CALIBRATION_KEYWORDS = ["oversized", "layering"] as const;
+const DEFAULT_CALIBRATION_KEYWORDS = ["layering"] as const;
 const SAFE_CALIBRATION_KEYWORDS = new Set(DEFAULT_CALIBRATION_KEYWORDS);
-const DEFAULT_MAX_TEMPORARY_IMAGES = 2;
 const IMAGE_SIZE = "1024x1280";
 const OUTPUT_DIR = ".tmp/cloudflare-image-quality-calibration";
 
@@ -27,11 +34,17 @@ function redact(value: string | undefined) {
   return value ? "[redacted]" : "";
 }
 
-function classifyFailure(error: unknown) {
+function sanitizeFailure(value: string, secrets: string[]) {
+  let safe = value;
+  for (const secret of secrets) if (secret) safe = safe.split(secret).join("[redacted]");
+  return safe.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 500);
+}
+
+function classifyFailure(error: unknown, secrets: string[]) {
   if (error instanceof RetryableImageGenerationError) {
-    return `Cloudflare quota/rate-limit failure: ${error.message}${error.retryAfterSeconds ? `; retry after ${error.retryAfterSeconds}s` : ""}`;
+    return sanitizeFailure(`Cloudflare quota/rate-limit failure: ${error.message}${error.retryAfterSeconds ? `; retry after ${error.retryAfterSeconds}s` : ""}`, secrets);
   }
-  return error instanceof Error ? error.message : String(error);
+  return sanitizeFailure(error instanceof Error ? error.message : String(error), secrets);
 }
 
 function calibrationKeywords() {
@@ -43,8 +56,10 @@ function calibrationKeywords() {
 }
 
 function maxTemporaryImages() {
-  const parsed = Number(process.env.CALIBRATION_MAX_TEMPORARY_IMAGES || DEFAULT_MAX_TEMPORARY_IMAGES);
-  return Number.isFinite(parsed) ? Math.max(1, Math.min(DEFAULT_MAX_TEMPORARY_IMAGES, parsed)) : DEFAULT_MAX_TEMPORARY_IMAGES;
+  const parsed = Number(process.env.CALIBRATION_MAX_TEMPORARY_IMAGES || MANUAL_CALIBRATION_MAX_CANDIDATES);
+  return Number.isFinite(parsed)
+    ? Math.max(1, Math.min(MANUAL_CALIBRATION_MAX_CANDIDATES, parsed))
+    : MANUAL_CALIBRATION_MAX_CANDIDATES;
 }
 
 async function decodedImageMetadata(imageBuffer: Buffer) {
@@ -65,22 +80,11 @@ async function decodedImageMetadata(imageBuffer: Buffer) {
 }
 
 function calibrationDirection(keyword: string) {
-  const directions: Record<string, string> = {
-    oversized:
-      "Manual calibration emphasis: show no visible inner collar or neckline tag area and no sewn label, size tab, brand patch or imitation writing. Prefer an off-centre close study of exaggerated dropped shoulder, sleeve volume and an extra-wide silhouette. Avoid a complete centred ecommerce shirt.",
-    floral:
-      "Manual calibration emphasis: make this a macro fashion textile or garment-surface study with botanical print registration, not a bouquet, vase or decorative flower object.",
-    leather:
-      "Manual calibration emphasis: make this an architectural leather construction still-life with dark leather grain, edge highlights and stitching, not denim, chambray or cotton.",
-    layering:
-      "Manual calibration emphasis: show clearly separate real garments with distinct collars, hems, sleeves and edges overlapping naturally. No fused garments, impossible seams or hybrid clothing object. Use believable material contrast and an asymmetric editorial arrangement. Avoid a centred product catalogue layout.",
-    kurta:
-      "Manual calibration emphasis: make this an edge-to-edge cropped kurta construction detail in indigo, maroon, forest green or restrained saffron; no caption panel, no decorative border and no fake writing.",
-  };
-  return directions[keyword] || "";
+  if (keyword !== "layering") throw new Error("Manual Cloudflare calibration supports layering only");
+  return "Manual calibration emphasis: show clearly separate real garments with distinct collars, hems, sleeves and edges overlapping naturally. No fused garments, impossible seams or hybrid clothing object. Use believable material contrast and an asymmetric editorial arrangement. Avoid a centred product catalogue layout.";
 }
 
-function promptForKeyword(keyword: string, imageModel: string) {
+function promptForKeyword(keyword: string, imageModel: string, candidateIndex: number, feedback: string[]) {
   const basePrompt = buildFashionImagePrompt({
     entityType: "trend",
     entityId: -1,
@@ -94,9 +98,20 @@ function promptForKeyword(keyword: string, imageModel: string) {
   return [
     basePrompt,
     "",
-    "Manual quality calibration requirement: this preview belongs to a two-card oversized/layering retest. Vary composition, palette and material between the two previews. Avoid repetitive centered garment-on-neutral-wall product catalog imagery.",
+    `Manual layering calibration candidate ${candidateIndex + 1} of ${MANUAL_CALIBRATION_MAX_CANDIDATES}.`,
+    "Vary composition, palette and material between attempts. Avoid repetitive centered garment-on-neutral-wall product catalog imagery.",
     calibrationDirection(keyword),
+    feedback.length ? `Avoid the safely summarized issues from rejected attempts: ${feedback.slice(-2).join("; ")}` : "",
   ].filter(Boolean).join("\n");
+}
+
+function failedCandidateValidation(candidateIndex: number, reason: string): TrendConceptValidationResult {
+  return {
+    passed: false,
+    score: 0,
+    rejectionReasons: [reason],
+    facts: { candidateIndex } as TrendConceptValidationResult["facts"],
+  };
 }
 
 function relative(path: string) {
@@ -115,7 +130,7 @@ function contactSheetHtml(reports: any[]) {
   const cards = reports.map((report) => `
     <article>
       <img src="${htmlEscape(relative(report.image?.path))}" alt="${htmlEscape(report.keyword)} preview" />
-      <h2>${htmlEscape(report.keyword)}</h2>
+      <h2>${htmlEscape(report.keyword)} candidate ${htmlEscape(Number(report.candidateIndex) + 1)}</h2>
       <p><strong>Status:</strong> ${htmlEscape(report.status)}</p>
       <p><strong>Composition:</strong> ${htmlEscape(report.brief?.compositionMode)} / ${htmlEscape(report.defect?.compositionDescription)}</p>
       <p><strong>Material:</strong> ${htmlEscape(report.brief?.materialFamily)} / ${htmlEscape(report.defect?.detectedMaterial)}</p>
@@ -143,7 +158,7 @@ function contactSheetHtml(reports: any[]) {
 </head>
 <body>
   <h1>Fashlock Cloudflare Image Quality Calibration</h1>
-  <p>Manual-only artifact. No Supabase reads or writes. No queue claims. One candidate per keyword.</p>
+  <p>Manual-only artifact. No Supabase reads or writes, queue claims, uploads or publication. Layering only; up to three sequential candidates; first fully validated candidate wins.</p>
   <section class="grid">${cards}</section>
 </body>
 </html>
@@ -184,153 +199,148 @@ async function main() {
   const semanticValidator = createImageSemanticValidator(calibrationEnv);
   const defectValidator = createImageDefectValidator(calibrationEnv);
   const reports: any[] = [];
+  const candidateReports: any[] = [];
 
   try {
-    for (const [index, keyword] of keywords.entries()) {
+    for (const keyword of keywords) {
       const brief = buildTrendImageBrief(keyword);
-      const prompt = promptForKeyword(keyword, imageModel);
-      const report: Record<string, unknown> = {
-        test: "cloudflare-image-quality-calibration",
-        keyword,
-        imageModel,
-        visionModel,
-        imageSize: IMAGE_SIZE,
-        candidateCount: 1,
-        credentials: {
-          accountId: redact(accountId),
-          apiToken: redact(apiToken),
-        },
-        brief: {
-          canonicalKeyword: brief.canonicalKeyword,
-          compositionMode: brief.compositionMode,
-          paletteFamily: brief.paletteFamily,
-          materialFamily: brief.materialFamily,
-          visualSubject: brief.visualSubject,
-        },
-        promptHash: createHash("sha256").update(prompt).digest("hex").slice(0, 16),
-        startedAt: new Date().toISOString(),
-      };
-
-      try {
-        const generated = await generator.generate({ prompt, model: imageModel, imageSize: IMAGE_SIZE, seed: 9000 + index });
-        const metadata = await decodedImageMetadata(generated.buffer);
-        const imagePath = join(outputDir, `${String(index + 1).padStart(2, "0")}-${keyword}.${metadata.format}`);
-        await writeFile(imagePath, generated.buffer);
-
-        const pixel = await analyzeImagePixels(generated.buffer, { ocrProvider });
-        if (!pixel.ocr.available) throw new Error(`local Tesseract OCR did not complete: ${pixel.ocr.error || "provider unavailable"}`);
-
-        const semantic = await semanticValidator.validate({ brief, imageBuffer: generated.buffer, candidateIndex: 0 });
-        if (!semantic.available) throw new Error(`Cloudflare semantic validation failed strict JSON schema: ${semantic.error || semantic.rejectionReasons.join("; ")}`);
-
-        const defect = await defectValidator.validate({ brief, imageBuffer: generated.buffer, pixel, candidateIndex: 0 });
-        if (!defect.available) {
-          Object.assign(report, {
-            defect: {
-              provider: defect.provider,
-              available: false,
-              passed: false,
-              error: defect.error,
-              confidence: defect.confidence,
-              reviewAttempts: defect.reviewAttempts,
-              incompleteEvidenceFields: defect.incompleteEvidenceFields,
-              rejectionReasons: defect.rejectionReasons,
+      const feedback: string[] = [];
+      const selection = await runManualCalibrationCandidateSelection({
+        maxCandidates: maxImages,
+        attempt: async (candidateIndex) => {
+          const prompt = promptForKeyword(keyword, imageModel, candidateIndex, feedback);
+          const report: Record<string, unknown> = {
+            test: "cloudflare-image-quality-calibration",
+            keyword,
+            candidateIndex,
+            imageModel,
+            visionModel,
+            imageSize: IMAGE_SIZE,
+            credentials: { accountId: redact(accountId), apiToken: redact(apiToken) },
+            brief: {
+              canonicalKeyword: brief.canonicalKeyword,
+              compositionMode: brief.compositionMode,
+              paletteFamily: brief.paletteFamily,
+              materialFamily: brief.materialFamily,
+              visualSubject: brief.visualSubject,
             },
-          });
-          throw new Error(`Cloudflare defect validation failed closed: ${defect.error || defect.rejectionReasons.join("; ")}`);
-        }
+            promptHash: createHash("sha256").update(prompt).digest("hex").slice(0, 16),
+            startedAt: new Date().toISOString(),
+          };
+          let validation: TrendConceptValidationResult;
 
-        const facts = candidateFactsFromAnalysis({ brief, pixel, semantic, defect, candidateIndex: 0 });
-        const validation = validateTrendConceptCandidate({ brief, facts });
+          try {
+            const generated = await generator.generate({
+              prompt,
+              model: imageModel,
+              imageSize: IMAGE_SIZE,
+              seed: 9000 + candidateIndex,
+            });
+            const metadata = await decodedImageMetadata(generated.buffer);
+            const stem = `${String(candidateIndex + 1).padStart(2, "0")}-${keyword}-candidate-${String(candidateIndex + 1).padStart(2, "0")}`;
+            const imagePath = join(outputDir, `${stem}.${metadata.format}`);
+            await writeFile(imagePath, generated.buffer);
 
-        Object.assign(report, {
-          completedAt: new Date().toISOString(),
-          status: validation.passed ? "passed" : "failed",
-          image: { path: imagePath, provider: generated.provider, model: generated.model, ...metadata },
-          pixel: {
-            width: pixel.width,
-            height: pixel.height,
-            aspectRatio: pixel.aspectRatio,
-            sharpness: pixel.sharpness,
-            contrast: pixel.contrast,
-            dominantPalette: pixel.dominantPalette,
-            dominantColor: pixel.dominantColor,
-            perceptualHash: pixel.perceptualHash,
-            integrityHash: pixel.integrityHash,
-          },
-          ocr: {
-            provider: pixel.ocr.provider,
-            available: pixel.ocr.available,
-            textDetected: pixel.ocr.textDetected,
-            suspiciousTagLikeTextDetected: Boolean(pixel.ocr.suspiciousTagLikeTextDetected),
-            suspiciousGlyphClusterCount: pixel.ocr.suspiciousGlyphClusters?.length || 0,
-            confidence: pixel.ocr.confidence,
-          },
-          semantic: {
-            provider: semantic.provider,
-            keywordMatch: semantic.keywordMatch,
-            fashionRelevance: semantic.fashionRelevance,
-            materialRealism: semantic.materialRealism,
-            compositionQuality: semantic.compositionQuality,
-            requiredCuesPresent: semantic.requiredCuesPresent,
-            forbiddenCuesPresent: semantic.forbiddenCuesPresent,
-            textDetected: semantic.textDetected,
-            logoDetected: semantic.logoDetected,
-            subjectDescription: semantic.subjectDescription,
-            materialDescription: semantic.materialDescription,
-            confidence: semantic.confidence,
-            rejectionReasons: semantic.rejectionReasons,
-          },
-          defect: {
-            provider: defect.provider,
-            available: defect.available,
-            passed: defect.passed,
-            visibleLabelDetected: defect.visibleLabelDetected,
-            imitationWritingDetected: defect.imitationWritingDetected,
-            logoOrWatermarkDetected: defect.logoOrWatermarkDetected,
-            materialContradictsBrief: defect.materialContradictsBrief,
-            repeatedCatalogComposition: defect.repeatedCatalogComposition,
-            fusedHybridGarmentDetected: defect.fusedHybridGarmentDetected,
-            detectedMaterial: defect.detectedMaterial,
-            subjectDescription: defect.subjectDescription,
-            materialDescription: defect.materialDescription,
-            compositionDescription: defect.compositionDescription,
-            tagRegionDescription: defect.tagRegionDescription,
-            confidence: defect.confidence,
-            reviewAttempts: defect.reviewAttempts,
-            incompleteEvidenceFields: defect.incompleteEvidenceFields,
-            rejectionReasons: defect.rejectionReasons,
-          },
-          publicationValidation: {
-            passed: validation.passed,
-            score: validation.score,
-            rejectionReasons: validation.rejectionReasons,
-          },
-        });
-      } catch (error) {
-        Object.assign(report, {
-          completedAt: new Date().toISOString(),
-          status: "failed",
-          error: classifyFailure(error),
-        });
-      }
+            const pixel = await analyzeImagePixels(generated.buffer, { ocrProvider });
+            if (!pixel.ocr.available) throw new Error(`local Tesseract OCR did not complete: ${pixel.ocr.error || "provider unavailable"}`);
+            const semantic = await semanticValidator.validate({ brief, imageBuffer: generated.buffer, candidateIndex });
+            if (!semantic.available) throw new Error(`Cloudflare semantic validation failed strict JSON schema: ${semantic.error || semantic.rejectionReasons.join("; ")}`);
+            const defect = await defectValidator.validate({ brief, imageBuffer: generated.buffer, pixel, candidateIndex });
+            if (!defect.available) {
+              Object.assign(report, { defect: {
+                provider: defect.provider, available: false, passed: false,
+                error: defect.error, confidence: defect.confidence, reviewAttempts: defect.reviewAttempts,
+                incompleteEvidenceFields: defect.incompleteEvidenceFields, rejectionReasons: defect.rejectionReasons,
+              } });
+              throw new Error(`Cloudflare defect validation failed closed: ${defect.error || defect.rejectionReasons.join("; ")}`);
+            }
 
-      reports.push(report);
-      await writeFile(join(outputDir, `${String(index + 1).padStart(2, "0")}-${keyword}.json`), `${JSON.stringify(report, null, 2)}\n`);
-      console.log(`${keyword}: ${report.status}`);
+            const facts = candidateFactsFromAnalysis({ brief, pixel, semantic, defect, candidateIndex });
+            validation = validateTrendConceptCandidate({ brief, facts });
+            Object.assign(report, {
+              completedAt: new Date().toISOString(),
+              status: validation.passed ? "passed" : "rejected",
+              image: { path: imagePath, provider: generated.provider, model: generated.model, ...metadata },
+              pixel: {
+                width: pixel.width, height: pixel.height, aspectRatio: pixel.aspectRatio,
+                sharpness: pixel.sharpness, contrast: pixel.contrast,
+                dominantPalette: pixel.dominantPalette, dominantColor: pixel.dominantColor,
+                perceptualHash: pixel.perceptualHash, integrityHash: pixel.integrityHash,
+              },
+              ocr: {
+                provider: pixel.ocr.provider, available: pixel.ocr.available,
+                textDetected: pixel.ocr.textDetected,
+                suspiciousTagLikeTextDetected: Boolean(pixel.ocr.suspiciousTagLikeTextDetected),
+                suspiciousGlyphClusterCount: pixel.ocr.suspiciousGlyphClusters?.length || 0,
+                confidence: pixel.ocr.confidence,
+              },
+              semantic: {
+                provider: semantic.provider, keywordMatch: semantic.keywordMatch,
+                fashionRelevance: semantic.fashionRelevance, materialRealism: semantic.materialRealism,
+                compositionQuality: semantic.compositionQuality, requiredCuesPresent: semantic.requiredCuesPresent,
+                forbiddenCuesPresent: semantic.forbiddenCuesPresent, textDetected: semantic.textDetected,
+                logoDetected: semantic.logoDetected, subjectDescription: semantic.subjectDescription,
+                materialDescription: semantic.materialDescription, confidence: semantic.confidence,
+                rejectionReasons: semantic.rejectionReasons,
+              },
+              defect: {
+                provider: defect.provider, available: defect.available, passed: defect.passed,
+                visibleLabelDetected: defect.visibleLabelDetected,
+                imitationWritingDetected: defect.imitationWritingDetected,
+                logoOrWatermarkDetected: defect.logoOrWatermarkDetected,
+                materialContradictsBrief: defect.materialContradictsBrief,
+                repeatedCatalogComposition: defect.repeatedCatalogComposition,
+                fusedHybridGarmentDetected: defect.fusedHybridGarmentDetected,
+                detectedMaterial: defect.detectedMaterial, subjectDescription: defect.subjectDescription,
+                materialDescription: defect.materialDescription, compositionDescription: defect.compositionDescription,
+                tagRegionDescription: defect.tagRegionDescription, confidence: defect.confidence,
+                reviewAttempts: defect.reviewAttempts, incompleteEvidenceFields: defect.incompleteEvidenceFields,
+                rejectionReasons: defect.rejectionReasons,
+              },
+              publicationValidation: {
+                passed: validation.passed, score: validation.score, rejectionReasons: validation.rejectionReasons,
+              },
+            });
+          } catch (error) {
+            const safeError = classifyFailure(error, [accountId, apiToken]);
+            validation = failedCandidateValidation(candidateIndex, `candidate validation failed: ${safeError}`);
+            Object.assign(report, {
+              completedAt: new Date().toISOString(), status: "rejected", error: safeError,
+              publicationValidation: { passed: false, score: 0, rejectionReasons: validation.rejectionReasons },
+            });
+          }
+
+          if (!validation.passed) feedback.push(validation.rejectionReasons.join(", "));
+          candidateReports.push(report);
+          await writeFile(
+            join(outputDir, `${String(candidateIndex + 1).padStart(2, "0")}-${keyword}-candidate-${String(candidateIndex + 1).padStart(2, "0")}.json`),
+            `${JSON.stringify(report, null, 2)}\n`,
+          );
+          console.log(`${keyword} candidate ${candidateIndex + 1}: ${report.status}`);
+          return { validation, artifact: report };
+        },
+      });
+
+      reports.push({
+        keyword,
+        status: selection.selected ? "passed" : "failed",
+        candidateCount: selection.attempts.length,
+        selectedCandidateIndex: selection.selected?.facts.candidateIndex ?? null,
+        candidates: selection.attempts.map(({ artifact }) => artifact),
+      });
     }
 
     await writeFile(join(outputDir, "calibration-report.json"), `${JSON.stringify({
       test: "cloudflare-image-quality-calibration",
-      imageCount: reports.length,
+      imageCount: candidateReports.filter((report) => report.image).length,
       maxTemporaryImages: maxImages,
       configuredMaxTemporaryImages: maxImages,
-      candidateCountPerKeyword: 1,
+      candidateCountPerKeyword: maxImages,
       keywords,
       generatedAt: new Date().toISOString(),
       reports,
     }, null, 2)}\n`);
-    await writeFile(join(outputDir, "index.html"), contactSheetHtml(reports));
+    await writeFile(join(outputDir, "index.html"), contactSheetHtml(candidateReports));
 
     const failures = reports.filter((report) => report.status !== "passed");
     if (failures.length) {
@@ -338,7 +348,7 @@ async function main() {
     }
 
     console.log("Cloudflare Image Quality Calibration passed");
-    console.log(`Generated ${reports.length} temporary images with one candidate each.`);
+    console.log(`Generated ${candidateReports.length} sequential temporary candidate(s); stopped at the first fully validated candidate.`);
     console.log(`Artifact directory: ${outputDir}`);
   } finally {
     await disposeOcrProvider(ocrProvider);
